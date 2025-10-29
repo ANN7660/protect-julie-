@@ -12,7 +12,6 @@ WELCOME_EMBED_CHANNEL_ID = None  # Salon pour message avec embed
 WELCOME_SIMPLE_CHANNEL_ID = 1433120551865417738  # Salon pour message simple
 
 # Configuration des intents
-
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -40,7 +39,7 @@ async def on_ready():
 async def on_member_join(member):
     """Message de bienvenue élégant avec embed et message simple"""
     
-    # Message avec embed dans le salon configuré
+    # Message avec embed dans le salon configuré (SANS image du serveur)
     if WELCOME_EMBED_CHANNEL_ID:
         embed_channel = bot.get_channel(WELCOME_EMBED_CHANNEL_ID)
         if embed_channel:
@@ -60,7 +59,6 @@ async def on_member_join(member):
             )
             
             welcome_embed.set_thumbnail(url=member.display_avatar.url)
-            welcome_embed.set_image(url=member.guild.icon.url if member.guild.icon else member.display_avatar.url)
             welcome_embed.set_footer(text="Équipe Hoshikuzu", icon_url=member.guild.icon.url if member.guild.icon else None)
             
             await embed_channel.send(embed=welcome_embed)
@@ -87,7 +85,7 @@ async def on_member_join(member):
         if welcome_channel:
             member_count = len(member.guild.members)
             
-            # Premier message - Embed avec image
+            # Premier message - Embed SANS image du serveur
             welcome_embed = discord.Embed(
                 title="🌸 Bienvenue sur Hoshikuzu !",
                 description=f"Salut {member.mention} ! 👋\n\nNous sommes ravis de t'accueillir dans notre communauté !\nTu es notre **{member_count}ème** membre ! 🎉",
@@ -102,7 +100,6 @@ async def on_member_join(member):
             )
             
             welcome_embed.set_thumbnail(url=member.display_avatar.url)
-            welcome_embed.set_image(url=member.guild.icon.url if member.guild.icon else member.display_avatar.url)
             welcome_embed.set_footer(text="Équipe Hoshikuzu", icon_url=member.guild.icon.url if member.guild.icon else None)
             
             await welcome_channel.send(embed=welcome_embed)
@@ -150,7 +147,7 @@ async def on_member_remove(member):
     if leave_channel:
         member_count = len(member.guild.members)
         
-        # Message avec embed
+        # Message avec embed SANS image du serveur
         leave_embed = discord.Embed(
             title="👋 Au revoir...",
             description=f"**{member.display_name}** vient de quitter **Hoshikuzu**\nNous sommes maintenant **{member_count}** membres.",
@@ -159,7 +156,6 @@ async def on_member_remove(member):
         )
         
         leave_embed.set_thumbnail(url=member.display_avatar.url)
-        leave_embed.set_image(url=member.guild.icon.url if member.guild.icon else member.display_avatar.url)
         leave_embed.set_footer(text=f"Membre depuis le {member.joined_at.strftime('%d/%m/%Y')}", icon_url=member.guild.icon.url if member.guild.icon else None)
         
         await leave_channel.send(embed=leave_embed)
@@ -218,7 +214,8 @@ async def set_leave_channel(ctx, channel: discord.TextChannel):
 @commands.has_permissions(administrator=True)
 async def show_config(ctx):
     """Affiche la configuration des salons"""
-    welcome_channel = bot.get_channel(WELCOME_CHANNEL_ID)
+    welcome_embed_channel = bot.get_channel(WELCOME_EMBED_CHANNEL_ID)
+    welcome_simple_channel = bot.get_channel(WELCOME_SIMPLE_CHANNEL_ID)
     leave_channel = bot.get_channel(LEAVE_CHANNEL_ID)
 
     embed = discord.Embed(
@@ -228,8 +225,14 @@ async def show_config(ctx):
     )
 
     embed.add_field(
-        name="🏠 Salon de bienvenue", 
-        value=welcome_channel.mention if welcome_channel else "❌ Non configuré",
+        name="🏠 Salon bienvenue (Embed)", 
+        value=welcome_embed_channel.mention if welcome_embed_channel else "❌ Non configuré",
+        inline=False
+    )
+
+    embed.add_field(
+        name="💬 Salon bienvenue (Simple)", 
+        value=welcome_simple_channel.mention if welcome_simple_channel else "❌ Non configuré",
         inline=False
     )
 
@@ -258,7 +261,7 @@ async def ban_member(ctx, member: discord.Member, *, raison="Aucune raison fourn
         try:
             dm_embed = discord.Embed(
                 title="🔨 Bannissement",
-                description=f"Tu as été banni de **Hoshimi**",
+                description=f"Tu as été banni de **Hoshikuzu**",
                 color=discord.Color.red()
             )
             dm_embed.add_field(name="📝 Raison", value=raison, inline=False)
@@ -300,7 +303,7 @@ async def kick_member(ctx, member: discord.Member, *, raison="Aucune raison four
         try:
             dm_embed = discord.Embed(
                 title="👢 Expulsion",
-                description=f"Tu as été expulsé de **Hoshimi**",
+                description=f"Tu as été expulsé de **Hoshikuzu**",
                 color=discord.Color.orange()
             )
             dm_embed.add_field(name="📝 Raison", value=raison, inline=False)
@@ -458,7 +461,7 @@ async def dm_all_members(ctx, *, message):
         failed_count = 0
         
         dm_embed = discord.Embed(
-            title=f"📢 Message de Hoshimi",
+            title=f"📢 Message de Hoshikuzu",
             description=message,
             color=discord.Color.blue(),
             timestamp=datetime.now()
@@ -668,7 +671,7 @@ async def user_info(ctx, membre: discord.Member = None):
 async def help_command(ctx):
     """Affiche toutes les commandes"""
     embed = discord.Embed(
-        title="📚 Commandes du Bot Hoshimi",
+        title="📚 Commandes du Bot Hoshikuzu",
         description="Voici toutes les commandes disponibles",
         color=discord.Color.purple(),
         timestamp=datetime.now()
@@ -676,7 +679,7 @@ async def help_command(ctx):
 
     embed.add_field(
         name="⚙️ Configuration (Admin)",
-        value="`+welcomechat #salon` - Définir le salon de bienvenue\n`+leavechat #salon` - Définir le salon des départs\n`+config` - Voir la configuration",
+        value="`+welcomeembed #salon` - Salon pour message embed\n`+welcomesimple #salon` - Salon pour message simple\n`+welcomechat #salon` - Salon bienvenue (ancien)\n`+leavechat #salon` - Salon des départs\n`+config` - Voir la configuration",
         inline=False
     )
 
