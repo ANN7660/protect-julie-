@@ -160,10 +160,7 @@ async def on_member_remove(member):
         
         await leave_channel.send(embed=leave_embed)
         
-        # Message simple
-        message_simple = f"À bientôt {member.display_name}... 💔"
-        await leave_channel.send(message_simple)
-
+      
 # ===== CONFIGURATION DES SALONS =====
 
 @bot.command(name='welcomechat')
