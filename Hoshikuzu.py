@@ -1763,35 +1763,31 @@ async def help_command(ctx: commands.Context):
 # EXÉCUTION FINALE DU BOT
 # ====================================================================
 
-import asyncio
-
-async def main():
-    async with bot:
-        # Démarre la tâche giveaway si pas déjà active
-        if not giveaway_task.is_running():
-            giveaway_task.start()
-        await bot.start(os.environ["DISCORD_BOT_TOKEN"])
-
-if __name__ == "__main__":
-           # Lance le petit serveur HTTP pour Render
-        threading.Thread(target=keep_alive, daemon=True).start()
-
-        try:
-            asyncio.run(main())
-
-       if not TOKEN:
-        print("❌ Erreur: La variable d'environnement 'DISCORD_BOT_TOKEN' n'est pas définie.")
+try:
+    asyncio.run(main())
+except discord.HTTPException as e:
+    if e.status == 429:
+        print("❌ Erreur : Trop de requêtes (Rate Limit). Attends avant de relancer.")
     else:
-        # Lance le petit serveur HTTP keep-alive pour Render
-        threading.Thread(target=keep_alive, daemon=True).start()
+        raise e
+except KeyboardInterrupt:
+    print("🛑 Bot arrêté manuellement.")
 
-        try:
-            asyncio.run(main())
-        except discord.HTTPException as e:
-            if e.status == 429:
-                print("❌ Erreur : Trop de requêtes (Rate Limit). Attends avant de relancer.")
-            else:
-                raise e
-        except KeyboardInterrupt:
-            print("🛑 Bot arrêté manuellement.")
+# Vérifie la présence du token
+if not TOKEN:
+    print("❌ Erreur: La variable d'environnement 'DISCORD_BOT_TOKEN' n'est pas définie.")
+else:
+    # Lance le petit serveur HTTP keep-alive pour Render
+    threading.Thread(target=keep_alive, daemon=True).start()
+
+    try:
+        asyncio.run(main())
+    except discord.HTTPException as e:
+        if e.status == 429:
+            print("❌ Erreur : Trop de requêtes (Rate Limit). Attends avant de relancer.")
+        else:
+            raise e
+    except KeyboardInterrupt:
+        print("🛑 Bot arrêté manuellement.")
+
 
