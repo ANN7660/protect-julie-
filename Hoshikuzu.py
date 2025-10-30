@@ -1803,4 +1803,36 @@ if __name__ == "__main__":
         try:
             # Ligne indentée de 12 espaces
             bot.run(TOKEN) # OU asyncio.run(main())
-        # ... (le reste du bloc try/except)
+        
+
+# === LANCEMENT DU BOT (CORRIGÉ POUR RENDER) ===
+
+import threading, http.server, socketserver, os
+
+def keep_alive():
+    """
+    Ouvre un petit serveur HTTP sur le port requis par Render pour éviter l'arrêt automatique.
+    """
+    port = int(os.environ.get("PORT", 8080))
+    handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", port), handler) as httpd:
+        print(f"✅ Serveur keep-alive lancé sur le port {port}")
+        httpd.serve_forever()
+
+if not os.getenv("DISCORD_BOT_TOKEN"):
+    print("❌ Erreur: La variable d'environnement 'DISCORD_BOT_TOKEN' n'est pas définie.")
+else:
+    TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+
+    # Lancer un petit serveur HTTP pour Render
+    threading.Thread(target=keep_alive, daemon=True).start()
+
+    try:
+        bot.run(TOKEN)
+    except discord.HTTPException as e:
+        if e.status == 429:
+            print("❌ Erreur : Trop de requêtes (Rate Limit). Attends avant de relancer.")
+        else:
+            raise e
+    except KeyboardInterrupt:
+        print("🛑 Bot arrêté manuellement.")
