@@ -8,10 +8,16 @@ import json
 import math 
 import urllib.parse # Pour l'encodage des URLs de recherche
 
+# --- CONSTANTES GLOBALES (AJOUTÉES) ---
+# Définition de l'emoji animé pour les messages de bienvenue
+ARROW_EMOJI = "<a:caarrow:1433143710094196997>"
+# ======================================
+
 # === KEEP ALIVE POUR RENDER / REPLIT ===
 import threading, http.server, socketserver, os
 
 def keep_alive():
+# ... (Reste de la fonction keep_alive inchangé)
     """Ouvre un petit serveur HTTP sur le port requis par Render pour éviter l'arrêt automatique."""
     port = int(os.environ.get("PORT", 8080))
     handler = http.server.SimpleHTTPRequestHandler
@@ -548,57 +554,66 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     # ... (Logique on_member_update inchangée)
     """Détecte si un membre commence à booster le serveur."""
     
-    is_boosting_before = before.premium_since is not None
-    is_boosting_after = after.premium_since is not None
-    
-    if not is_boosting_before and is_boosting_after:
-        boost_channel = get_channel_by_config("BOOST_CHANNEL_ID")
-        
-        if boost_channel:
-            boost_count = after.guild.premium_subscription_count
-            
-            embed = discord.Embed(
-                title="✨ Nouveau Boost de Serveur !",
-                description=f"🎉 Merci infiniment à {after.mention} pour le boost !\nVotre soutien aide le serveur à atteindre de nouveaux avantages.\n\nLe serveur a maintenant **{boost_count}** boosts au total !",
-                color=discord.Color.from_rgb(244, 155, 237), 
-                timestamp=datetime.now()
-            )
-            embed.set_thumbnail(url=after.display_avatar.url)
-            embed.set_footer(text=f"{after.display_name} est un Nitro Booster !")
-            
-            try:
-                await boost_channel.send(f"**Merci** {after.mention} pour le boost ! 💜", embed=embed)
-            except discord.Forbidden:
-                print(f"❌ Erreur: Le bot ne peut pas envoyer le message de boost dans le salon configuré.")
+    # Hoshikuzu.py (Autour de la ligne 557)
 
+# --- ÉVÉNEMENTS (BIENVENUE / DÉPART / BOOST / LOGS - CORRIGÉ) ---
 
 @bot.event
-async def on_message_delete(message: discord.Message):
-    # ... (Logique on_message_delete inchangée)
-    """Log les messages supprimés"""
-    if message.author.bot or not message.guild:
-        return
+async def on_member_join(member: discord.Member):
+    """Message de bienvenue élégant avec embed et message simple"""
+    
+    # Récupère les salons configurés
+    embed_channel = get_channel_by_config("WELCOME_EMBED_CHANNEL_ID")
+    simple_channel = get_channel_by_config("WELCOME_SIMPLE_CHANNEL_ID")
+    member_count = len(member.guild.members) # Récupération du compte une seule fois
+    
+    # Message avec embed (Salon 1: WELCOME_EMBED_CHANNEL_ID)
+    if embed_channel:
+        welcome_embed = discord.Embed(
+            title="🌸 Bienvenue sur Hoshikuzu !",
+            description=f"Salut {member.mention} ! 👋\nTu es notre **{member_count}ème** membre ! 🎉",
+            color=discord.Color.purple(),
+            timestamp=datetime.now()
+        )
+        welcome_embed.set_thumbnail(url=member.display_avatar.url)
+        welcome_embed.set_footer(text="Équipe Hoshikuzu", icon_url=member.guild.icon.url if member.guild.icon else None)
+        await embed_channel.send(embed=welcome_embed)
+    
+    # Message simple (Salon 2: WELCOME_SIMPLE_CHANNEL_ID) - UTILISATION DE ARROW_EMOJI
+    if simple_channel:
+        message = (
+            f"{ARROW_EMOJI} Bienvenue {member.mention} sur Hoshikuzu ! Nous sommes ravis de t'accueillir ! 🎉\n"
+            f"{ARROW_EMOJI} Nous sommes désormais **{member_count}** membres sur Hoshikuzu ! ✨"
+        )
+        await simple_channel.send(message)
 
-    embed = discord.Embed(
-        title="🗑️ Message Supprimé",
-        color=discord.Color.dark_red(),
-        timestamp=datetime.now()
+    # MP de bienvenue (CORRECTION RATE LIMIT ET FORBIDDEN)
+    dm_embed = discord.Embed(
+        title="🎉 Bienvenue sur Hoshikuzu !",
+        # Utilisation de ARROW_EMOJI dans le DM
+        description=(
+            f"{ARROW_EMOJI} Salut {member.mention} ! 👋\n"
+            f"{ARROW_EMOJI} Tu es notre **{member_count}ème** membre ! 🎉"
+        ),
+        color=discord.Color.green(),
     )
-    embed.add_field(name="Auteur", value=message.author.mention, inline=True)
-    embed.add_field(name="Salon", value=message.channel.mention, inline=True)
+    dm_embed.add_field(name="📝 Pour bien commencer", value="• Lis les règles\n• Amuse-toi bien !", inline=False)
     
-    content = message.content[:1024] if message.content else "*Contenu vide (Image/Embed/etc)*"
-    embed.add_field(name="Contenu", value=f"```\n{content}\n```", inline=False)
-    embed.set_footer(text=f"ID: {message.id}")
-    
-    await send_to_logs(message.guild, embed)
-
-@bot.event
-async def on_message_edit(before: discord.Message, after: discord.Message):
-    # ... (Logique on_message_edit inchangée)
-    """Log les messages modifiés"""
-    if before.author.bot or before.content == after.content or not before.guild:
-        return
+    # Bloc try...except complet pour gérer les deux erreurs (Forbidden et Rate Limit)
+    try:
+        await member.send(embed=dm_embed)
+        print(f"DM de bienvenue envoyé avec succès à {member.name}.")
+        
+    except discord.Forbidden:
+        print(f"Échec du DM à {member.name}. (DMs désactivés par l'utilisateur)")
+        pass 
+        
+    except discord.HTTPException as e:
+        if e.code == 40003: # Code 40003: Rate Limit
+            print(f"Discord Rate Limit (40003): Impossible d'envoyer un DM à {member.name}. Trop de DMs ouverts trop rapidement.")
+        else:
+            print(f"Une erreur HTTP inattendue est survenue lors de l'envoi du DM à {member.name}: {e}")
+        pass
 
     embed = discord.Embed(
         title="📝 Message Modifié",
@@ -1763,31 +1778,29 @@ async def help_command(ctx: commands.Context):
 # EXÉCUTION FINALE DU BOT
 # ====================================================================
 
-try:
-    asyncio.run(main())
-except discord.HTTPException as e:
-    if e.status == 429:
-        print("❌ Erreur : Trop de requêtes (Rate Limit). Attends avant de relancer.")
+# Hoshikuzu.py (Fin du fichier)
+
+# ====================================================================
+# EXÉCUTION
+# ====================================================================
+
+# La ligne ci-dessous (if __name__ == "__main__":) doit être alignée complètement à GAUCHE.
+if __name__ == "__main__":
+    # La ligne ci-dessous (TOKEN = ...) doit être indentée de 4 espaces.
+    TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
+    
+    # La ligne ci-dessous (if not TOKEN:) est votre ligne 1782, elle doit être indentée de 4 espaces.
+    if not TOKEN:
+        # Ligne indentée de 8 espaces
+        print("❌ Erreur: La variable d'environnement 'DISCORD_BOT_TOKEN' n'est pas définie.")
+    # La ligne ci-dessous (else:) doit être indentée de 4 espaces.
     else:
-        raise e
-except KeyboardInterrupt:
-    print("🛑 Bot arrêté manuellement.")
+        # Lignes indentées de 8 espaces
+        # Lance le petit serveur HTTP keep-alive pour Render
+        threading.Thread(target=keep_alive, daemon=True).start()
 
-# Vérifie la présence du token
-if not TOKEN:
-    print("❌ Erreur: La variable d'environnement 'DISCORD_BOT_TOKEN' n'est pas définie.")
-else:
-    # Lance le petit serveur HTTP keep-alive pour Render
-    threading.Thread(target=keep_alive, daemon=True).start()
-
-    try:
-        asyncio.run(main())
-    except discord.HTTPException as e:
-        if e.status == 429:
-            print("❌ Erreur : Trop de requêtes (Rate Limit). Attends avant de relancer.")
-        else:
-            raise e
-    except KeyboardInterrupt:
-        print("🛑 Bot arrêté manuellement.")
-
-
+        # Ligne indentée de 8 espaces
+        try:
+            # Ligne indentée de 12 espaces
+            bot.run(TOKEN) # OU asyncio.run(main())
+        # ... (le reste du bloc try/except)
