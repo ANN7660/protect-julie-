@@ -481,37 +481,28 @@ async def on_member_join(member: discord.Member):
     if embed_channel:
         member_count = len(member.guild.members)
         welcome_embed = discord.Embed(
-           import discord
-from datetime import datetime
-
-# Assuming 'member' and 'member_count' are defined earlier in your script
-
-# Define the custom animated emoji string
-ARROW_EMOJI = "<a:caarrow:1433143710094196997>"
-
-embed = discord.Embed(
-    title="🌸 Bienvenue sur Hoshikuzu !",
-    description=(
-        f"{ARROW_EMOJI} Salut {member.mention} ! 👋\n"
-        f"{ARROW_EMOJI} Tu es notre **{member_count}ème** membre ! 🎉"
-    ),
-    color=discord.Color.purple(),
-    timestamp=datetime.now()
-)
+            title="🌸 Bienvenue sur Hoshikuzu !",
+            description=f"Salut {member.mention} ! 👋\nTu es notre **{member_count}ème** membre ! 🎉",
+            color=discord.Color.purple(),
+            timestamp=datetime.now()
         )
         welcome_embed.set_thumbnail(url=member.display_avatar.url)
         welcome_embed.set_footer(text="Équipe Hoshikuzu", icon_url=member.guild.icon.url if member.guild.icon else None)
         await embed_channel.send(embed=welcome_embed)
     
     # Message simple
-    if simple_channel:
-        member_count = len(member.guild.members)
-        # Note: Les IDs d'emojis personnalisés (caarrow) doivent être valides sur votre serveur
-        message = (
-            f"Bienvenue {member.mention} sur Hoshikuzu ! Nous sommes ravis de t'accueillir ! 🎉\n"
-            f"Nous sommes désormais **{member_count}** membres sur Hoshikuzu ! ✨"
-        )
-        await simple_channel.send(message)
+# Define the custom animated emoji string
+ARROW_EMOJI = "<a:caarrow:1433143710094196997>"
+
+# ... (Previous code where 'member' and 'simple_channel' are defined)
+
+member_count = len(member.guild.members)
+# Note: Les IDs d'emojis personnalisés (caarrow) doivent être valides sur votre serveur
+message = (
+    f"{ARROW_EMOJI} Bienvenue {member.mention} sur Hoshikuzu ! Nous sommes ravis de t'accueillir ! 🎉\n"
+    f"{ARROW_EMOJI} Nous sommes désormais **{member_count}** membres sur Hoshikuzu ! ✨"
+)
+await simple_channel.send(message)
     
     # MP de bienvenue
     try:
