@@ -1779,25 +1779,19 @@ if __name__ == "__main__":
         try:
             asyncio.run(main())
 
-    except discord.HTTPException as e:
-        if e.status == 429:
-            print("❌ Erreur : Trop de requêtes (Rate Limit). Attends avant de relancer.")
-        else:
-            raise e
-    except KeyboardInterrupt:
-        print("🛑 Bot arrêté manuellement.")
-
-    if not TOKEN:
+       if not TOKEN:
         print("❌ Erreur: La variable d'environnement 'DISCORD_BOT_TOKEN' n'est pas définie.")
     else:
-        # Lance le serveur Flask pour garder le bot en ligne
-        # NOTE: La fonction keep_alive() dépend d'un environnement (ex: Replit)
-        # Assurez-vous d'avoir la fonction keep_alive() définie si vous l'utilisez
-        # keep_alive()
+        # Lance le petit serveur HTTP keep-alive pour Render
+        threading.Thread(target=keep_alive, daemon=True).start()
+
         try:
-            bot.run(TOKEN)
-        except discord.HTTPException as :
+            asyncio.run(main())
+        except discord.HTTPException as e:
             if e.status == 429:
-                print("❌ Erreur de limite de débit (Rate Limit). Veuillez attendre avant de redémarrer le bot.")
+                print("❌ Erreur : Trop de requêtes (Rate Limit). Attends avant de relancer.")
             else:
-                raise 
+                raise e
+        except KeyboardInterrupt:
+            print("🛑 Bot arrêté manuellement.")
+
