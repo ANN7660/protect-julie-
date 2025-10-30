@@ -1796,8 +1796,8 @@ if __name__ == "__main__":
         # keep_alive()
         try:
             bot.run(TOKEN)
-        except discord.HTTPException as e:
+        except discord.HTTPException as :
             if e.status == 429:
                 print("❌ Erreur de limite de débit (Rate Limit). Veuillez attendre avant de redémarrer le bot.")
             else:
-                raise e
+                raise 
