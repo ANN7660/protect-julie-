@@ -491,18 +491,14 @@ async def on_member_join(member: discord.Member):
         await embed_channel.send(embed=welcome_embed)
     
     # Message simple
-# Define the custom animated emoji string
-ARROW_EMOJI = "<a:caarrow:1433143710094196997>"
-
-# ... (Previous code where 'member' and 'simple_channel' are defined)
-
-member_count = len(member.guild.members)
-# Note: Les IDs d'emojis personnalisés (caarrow) doivent être valides sur votre serveur
-message = (
-    f"{ARROW_EMOJI} Bienvenue {member.mention} sur Hoshikuzu ! Nous sommes ravis de t'accueillir ! 🎉\n"
-    f"{ARROW_EMOJI} Nous sommes désormais **{member_count}** membres sur Hoshikuzu ! ✨"
-)
-await simple_channel.send(message)
+    if simple_channel:
+        member_count = len(member.guild.members)
+        # Note: Les IDs d'emojis personnalisés (caarrow) doivent être valides sur votre serveur
+        message = (
+            f"Bienvenue {member.mention} sur Hoshikuzu ! Nous sommes ravis de t'accueillir ! 🎉\n"
+            f"Nous sommes désormais **{member_count}** membres sur Hoshikuzu ! ✨"
+        )
+        await simple_channel.send(message)
     
     # MP de bienvenue
     try:
