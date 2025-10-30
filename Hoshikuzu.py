@@ -36,7 +36,16 @@ CONFIG_CHANNELS = {
     "LEAVE_CHANNEL_ID": 1433096160800804894,
     "WELCOME_EMBED_CHANNEL_ID": None, 
     "WELCOME_SIMPLE_CHANNEL_ID": 1433120551865417738,
-    "LOGS_CHANNEL_ID": None,  # 🆕 Nouveau : Salon de log pour les événements
+    "LOGS_CHANNEL_ID": None, 
+    # IDs pour le système de tickets
+    "TICKET_CATEGORY_ID": None, # Catégorie où les tickets seront créés
+    # 🆕 ID pour le boost
+    "BOOST_CHANNEL_ID": None, # Salon où envoyer le message de boost
+}
+
+# Nouvelle configuration pour les rôles
+CONFIG_ROLES = {
+    "SUPPORT_ROLE_ID": None, # Rôle des modérateurs/supports
 }
 
 # Configuration des intents
@@ -51,6 +60,14 @@ bot = commands.Bot(command_prefix='+', intents=intents, help_command=None)
 def get_channel_by_config(key):
     return bot.get_channel(CONFIG_CHANNELS.get(key))
 
+# Fonction utilitaire pour récupérer un rôle par son ID
+def get_role_by_config(key):
+    role_id = CONFIG_ROLES.get(key)
+    if role_id and bot.guilds:
+        # On utilise le premier serveur disponible pour chercher le rôle
+        return discord.utils.get(bot.guilds[0].roles, id=role_id)
+    return None
+
 # Fonction utilitaire pour envoyer un message aux logs
 async def send_to_logs(guild, embed):
     """Envoie l'embed spécifié au salon de logs configuré."""
@@ -62,6 +79,128 @@ async def send_to_logs(guild, embed):
             print(f"❌ Erreur: Le bot ne peut pas envoyer de message dans le salon de logs ({logs_channel.name}).")
         except Exception as e:
             print(f"❌ Erreur lors de l'envoi au salon de logs: {e}")
+
+# ===== ✅ VUE ET LOGIQUE DU TICKET (Bouton) (Aucun changement) =====
+
+class TicketCreateView(discord.ui.View):
+    """Vue contenant le bouton pour ouvrir un ticket."""
+    def __init__(self, bot_instance):
+        super().__init__(timeout=None) # Timeout=None rend le bouton permanent
+        self.bot = bot_instance
+        
+    @discord.ui.button(label="📩 Ouvrir un Ticket", style=discord.ButtonStyle.blurple, custom_id="ticket_button_create")
+    async def create_ticket_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user = interaction.user
+        guild = interaction.guild
+        
+        # 1. Vérifications
+        category_id = CONFIG_CHANNELS.get("TICKET_CATEGORY_ID")
+        support_role = get_role_by_config("SUPPORT_ROLE_ID")
+        
+        if not category_id or not support_role:
+            await interaction.response.send_message(
+                "❌ **Erreur Configuration** : La catégorie ou le rôle de support n'est pas configuré. Demandez à un administrateur.", 
+                ephemeral=True
+            )
+            return
+
+        category = self.bot.get_channel(category_id)
+        if not category or not isinstance(category, discord.CategoryChannel):
+            await interaction.response.send_message(
+                "❌ **Erreur Configuration** : La catégorie de ticket est invalide. Demandez à un administrateur.", 
+                ephemeral=True
+            )
+            return
+
+        # Vérifie si l'utilisateur a déjà un ticket ouvert (canaux nommés "ticket-...")
+        for channel in category.text_channels:
+            if channel.topic and str(user.id) in channel.topic: 
+                await interaction.response.send_message(
+                    f"❌ Vous avez déjà un ticket ouvert : {channel.mention}", 
+                    ephemeral=True
+                )
+                return
+        
+        # 2. Définition des Permissions
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False), 
+            user: discord.PermissionOverwrite(
+                view_channel=True, 
+                send_messages=True, 
+                read_message_history=True, 
+                attach_files=True
+            ), 
+            support_role: discord.PermissionOverwrite(
+                view_channel=True, 
+                send_messages=True, 
+                read_message_history=True, 
+                manage_channels=True 
+            ), 
+            guild.me: discord.PermissionOverwrite(view_channel=True) 
+        }
+        
+        # 3. Création du Canal
+        channel_name = f"ticket-{user.name.lower().replace(' ', '-').replace('.', '')}"[:100]
+        try:
+            ticket_channel = await guild.create_text_channel(
+                name=channel_name, 
+                category=category, 
+                overwrites=overwrites,
+                topic=f"Ticket ouvert par {user.name} ({user.id}) le {datetime.now().strftime('%d/%m/%Y à %H:%M')}"
+            )
+
+            # 4. Message de Bienvenue dans le Ticket
+            embed = discord.Embed(
+                title="🎫 Ticket Ouvert",
+                description=f"Bienvenue {user.mention} ! L'équipe de support a été notifiée et vous répondra dès que possible.\n\nDécrivez votre problème en détail ci-dessous.",
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="Rôle Support", value=support_role.mention)
+            
+            await ticket_channel.send(f"{user.mention} {support_role.mention}", embed=embed, view=TicketCloseView())
+            await interaction.response.send_message(f"✅ Votre ticket est ouvert dans {ticket_channel.mention} !", ephemeral=True)
+
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ Je n'ai pas les permissions nécessaires pour créer des canaux (Vérifiez les rôles/catégories).", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Erreur inattendue : {e}", ephemeral=True)
+
+
+class TicketCloseView(discord.ui.View):
+    """Vue contenant le bouton pour fermer et supprimer le ticket."""
+    def __init__(self):
+        super().__init__(timeout=None) 
+        
+    @discord.ui.button(label="🔒 Fermer le Ticket", style=discord.ButtonStyle.red, custom_id="ticket_button_close")
+    async def close_ticket_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        
+        support_role = get_role_by_config("SUPPORT_ROLE_ID")
+        is_staff = support_role and support_role in interaction.user.roles
+        
+        if not interaction.channel.name.startswith("ticket-"):
+             await interaction.response.send_message("❌ Ce n'est pas un canal de ticket.", ephemeral=True)
+             return
+        
+        is_ticket_owner = False
+        if interaction.channel.topic:
+            user_id_in_topic = interaction.channel.topic.split('(')[-1].split(')')[0] if interaction.channel.topic else None
+            is_ticket_owner = str(interaction.user.id) == user_id_in_topic
+            
+        if not is_staff and not interaction.user.top_role.permissions.administrator and not is_ticket_owner:
+            await interaction.response.send_message("❌ Vous n'avez pas la permission de fermer ce ticket.", ephemeral=True)
+            return
+
+        await interaction.response.send_message(f"🔒 Ticket fermé par {interaction.user.mention}. Suppression dans 5 secondes...")
+        await asyncio.sleep(5)
+        
+        try:
+            await interaction.channel.delete(reason=f"Ticket fermé par {interaction.user.display_name}")
+        except discord.Forbidden:
+            logs_channel = get_channel_by_config("LOGS_CHANNEL_ID")
+            if logs_channel:
+                 await logs_channel.send(f"❌ Le bot n'a pas pu supprimer le canal de ticket {interaction.channel.name} par manque de permissions.")
+        except Exception as e:
+            print(f"Erreur lors de la suppression du ticket: {e}")
 
 
 # ===== ÉVÉNEMENTS DU BOT (LIFECYCLE) =====
@@ -76,6 +215,10 @@ async def on_ready():
     print(f"👥 Utilisateurs globaux: {len(bot.users)}") 
     print('=' * 60)
 
+    # Ajout des vues persistantes pour les boutons de tickets
+    bot.add_view(TicketCreateView(bot))
+    bot.add_view(TicketCloseView())
+    
     # Définit l'activité et le statut
     await bot.change_presence(
         activity=discord.Game(name="Hoshikuzu"),
@@ -108,7 +251,7 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
         # await ctx.send("❌ **Erreur inconnue** : Une erreur est survenue lors de l'exécution.")
 
 
-# ===== ÉVÉNEMENTS (BIENVENUE / DÉPART) =====
+# --- ÉVÉNEMENTS (BIENVENUE / DÉPART) ---
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -130,9 +273,15 @@ async def on_member_join(member: discord.Member):
         welcome_embed.set_footer(text="Équipe Hoshikuzu", icon_url=member.guild.icon.url if member.guild.icon else None)
         await embed_channel.send(embed=welcome_embed)
     
-    # Message simple
+    # Message simple (MIS À JOUR)
     if simple_channel:
-        await simple_channel.send(f"Bienvenue {member.mention} sur Hoshikuzu ! 💫")
+        # ✅ MODIFIÉ : Ajout de l'emoji animé au début des deux lignes, y compris le compte de membres
+        member_count = len(member.guild.members)
+        message = (
+            f"<a:caarrow:1433143710094196997> **Bienvenue** {member.mention} sur Hoshikuzu ! Nous sommes ravis de t'accueillir ! 🎉\n"
+            f"<a:caarrow:1433143710094196997> Nous sommes désormais **{member_count}** membres sur Hoshikuzu ! ✨"
+        )
+        await simple_channel.send(message)
     
     # MP de bienvenue
     try:
@@ -165,7 +314,40 @@ async def on_member_remove(member: discord.Member):
         await leave_channel.send(embed=leave_embed)
 
 
-# ===== 🆕 ÉVÉNEMENTS DE LOGS (Journalisation) =====
+# ===== 🆕 ÉVÉNEMENT DE BOOST (Nouveau) (Aucun changement) =====
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    """Détecte si un membre commence à booster le serveur."""
+    
+    # 1. Vérifie si le changement concerne le statut de boost (booster rôle)
+    is_boosting_before = before.premium_since is not None
+    is_boosting_after = after.premium_since is not None
+    
+    # Si le membre n'était pas booster et l'est devenu
+    if not is_boosting_before and is_boosting_after:
+        boost_channel = get_channel_by_config("BOOST_CHANNEL_ID")
+        
+        if boost_channel:
+            # Récupère le nombre actuel de boosts pour le serveur
+            boost_count = after.guild.premium_subscription_count
+            
+            embed = discord.Embed(
+                title="✨ Nouveau Boost de Serveur !",
+                description=f"🎉 Merci infiniment à {after.mention} pour le boost !\nVotre soutien aide le serveur à atteindre de nouveaux avantages.\n\nLe serveur a maintenant **{boost_count}** boosts au total !",
+                color=discord.Color.from_rgb(244, 155, 237), # Couleur Discord Boost
+                timestamp=datetime.now()
+            )
+            embed.set_thumbnail(url=after.display_avatar.url)
+            embed.set_footer(text=f"{after.display_name} est un Nitro Booster !")
+            
+            try:
+                await boost_channel.send(f"**Merci** {after.mention} pour le boost ! 💜", embed=embed)
+            except discord.Forbidden:
+                print(f"❌ Erreur: Le bot ne peut pas envoyer le message de boost dans le salon configuré.")
+
+
+# ===== ÉVÉNEMENTS DE LOGS (Journalisation) (Aucun changement) =====
 
 @bot.event
 async def on_message_delete(message: discord.Message):
@@ -216,9 +398,6 @@ async def on_member_ban(guild: discord.Guild, user: discord.User):
         color=discord.Color.red(),
         timestamp=datetime.now()
     )
-    # L'API ne donne pas directement la raison ici, on se base sur le log d'audit
-    # Pour avoir la raison, il faudrait analyser le log d'audit, mais c'est complexe.
-    # On se contente du fait.
     embed.set_thumbnail(url=user.display_avatar.url)
     embed.add_field(name="ID", value=user.id, inline=False)
     
@@ -239,7 +418,7 @@ async def on_member_unban(guild: discord.Guild, user: discord.User):
     await send_to_logs(guild, embed)
 
 
-# ===== COMMANDES DE CONFIGURATION (Admin) =====
+# --- COMMANDES DE CONFIGURATION (Admin) (Aucun changement) ---
 
 @bot.command(name='setlogs')
 @commands.has_permissions(administrator=True)
@@ -253,6 +432,56 @@ async def set_logs_channel(ctx: commands.Context, channel: discord.TextChannel):
     )
     await ctx.send(embed=embed)
 
+# 🆕 Commande de configuration du boost
+@bot.command(name='setboostchannel')
+@commands.has_permissions(administrator=True)
+async def set_boost_channel(ctx: commands.Context, channel: discord.TextChannel):
+    """Configure le salon pour les messages de remerciement de boost."""
+    CONFIG_CHANNELS["BOOST_CHANNEL_ID"] = channel.id
+    embed = discord.Embed(description=f"✅ Le salon des **Remerciements de Boost** a été configuré sur {channel.mention}.", color=discord.Color.green())
+    await ctx.send(embed=embed)
+
+
+# Commandes de configuration des tickets
+@bot.command(name='setticketcategory')
+@commands.has_permissions(administrator=True)
+async def set_ticket_category(ctx: commands.Context, category: discord.CategoryChannel):
+    """Configure la catégorie où les tickets seront créés."""
+    CONFIG_CHANNELS["TICKET_CATEGORY_ID"] = category.id
+    embed = discord.Embed(description=f"✅ La **Catégorie de Tickets** a été configurée sur **{category.name}**.", color=discord.Color.green())
+    await ctx.send(embed=embed)
+
+@bot.command(name='setticketrole')
+@commands.has_permissions(administrator=True)
+async def set_ticket_role(ctx: commands.Context, role: discord.Role):
+    """Configure le rôle qui aura accès aux tickets."""
+    CONFIG_ROLES["SUPPORT_ROLE_ID"] = role.id
+    embed = discord.Embed(description=f"✅ Le **Rôle de Support/Staff** a été configuré sur {role.mention}.", color=discord.Color.green())
+    await ctx.send(embed=embed)
+
+
+@bot.command(name='sendticketpanel')
+@commands.has_permissions(administrator=True)
+async def send_ticket_panel(ctx: commands.Context, channel: discord.TextChannel = None):
+    """Envoie le message avec le bouton pour ouvrir un ticket."""
+    
+    if not CONFIG_CHANNELS.get("TICKET_CATEGORY_ID") or not CONFIG_ROLES.get("SUPPORT_ROLE_ID"):
+          return await ctx.send("❌ Vous devez d'abord configurer la catégorie et le rôle de support avec `+setticketcategory` et `+setticketrole`.")
+          
+    target_channel = channel or ctx.channel
+    
+    embed = discord.Embed(
+        title="Centre d'Aide et Support 📩",
+        description="Cliquez sur le bouton ci-dessous pour ouvrir un **ticket privé** avec l'équipe de modération/support.\n\n*Veuillez décrire votre problème en détail.*",
+        color=discord.Color.dark_purple()
+    )
+    
+    await target_channel.send(embed=embed, view=TicketCreateView(bot))
+    if target_channel != ctx.channel:
+        await ctx.send(f"✅ Le panneau de tickets a été envoyé dans {target_channel.mention}", delete_after=5)
+
+
+# Commandes de bienvenue/départ
 @bot.command(name='welcomechat')
 @commands.has_permissions(administrator=True)
 async def set_welcome_channel(ctx: commands.Context, channel: discord.TextChannel):
@@ -286,23 +515,34 @@ async def set_leave_channel(ctx: commands.Context, channel: discord.TextChannel)
 @bot.command(name='config')
 @commands.has_permissions(administrator=True)
 async def show_config(ctx: commands.Context):
-    """Affiche la configuration des salons"""
+    """Affiche la configuration des salons (Mise à jour pour les tickets et boost)."""
     embed_channel = get_channel_by_config("WELCOME_EMBED_CHANNEL_ID")
     simple_channel = get_channel_by_config("WELCOME_SIMPLE_CHANNEL_ID")
     leave_channel = get_channel_by_config("LEAVE_CHANNEL_ID")
-    logs_channel = get_channel_by_config("LOGS_CHANNEL_ID") # Affichage du nouveau salon
+    logs_channel = get_channel_by_config("LOGS_CHANNEL_ID") 
+    ticket_category = get_channel_by_config("TICKET_CATEGORY_ID") 
+    support_role = get_role_by_config("SUPPORT_ROLE_ID") 
+    boost_channel = get_channel_by_config("BOOST_CHANNEL_ID")
 
     embed = discord.Embed(title="⚙️ Configuration du Bot", color=discord.Color.blue(), timestamp=datetime.now())
 
+    embed.add_field(name="--- Bienvenue/Départ/Boost ---", value=" ", inline=False)
     embed.add_field(name="🏠 Bienvenue (Embed)", value=embed_channel.mention if embed_channel else "❌ Non configuré", inline=False)
     embed.add_field(name="💬 Bienvenue (Simple)", value=simple_channel.mention if simple_channel else "❌ Non configuré", inline=False)
     embed.add_field(name="👋 Salons des départs", value=leave_channel.mention if leave_channel else "❌ Non configuré", inline=False)
+    embed.add_field(name="✨ Salon de Boost", value=boost_channel.mention if boost_channel else "❌ Non configuré", inline=False)
+    
+    embed.add_field(name="--- Tickets et Logs ---", value=" ", inline=False) 
     embed.add_field(name="📝 Salon de Logs", value=logs_channel.mention if logs_channel else "❌ Non configuré", inline=False)
+    embed.add_field(name="🎫 Catégorie Ticket", value=ticket_category.mention if ticket_category else "❌ Non configuré", inline=False)
+    embed.add_field(name="👮 Rôle Support", value=support_role.mention if support_role else "❌ Non configuré", inline=False)
+
 
     embed.set_footer(text=f"Demandé par {ctx.author.display_name}")
     await ctx.send(embed=embed)
 
-# ===== MODÉRATION (Commandes complètes) =====
+
+# --- MODÉRATION (Commandes complètes) (Aucun changement) ---
 
 @bot.command(name='ban')
 @commands.has_permissions(ban_members=True)
@@ -318,9 +558,6 @@ async def ban_member(ctx: commands.Context, member: discord.Member, *, raison="A
         await ctx.send(embed=embed)
     except discord.Forbidden:
         await ctx.send("❌ Je n'ai pas les permissions pour bannir ce membre !")
-
-# ... autres commandes de modération (kick, mute, unmute, clear) ...
-# Les commandes 'kick', 'mute', 'unmute' et 'clear' ont été laissées du premier code (le plus complet)
 
 @bot.command(name='kick')
 @commands.has_permissions(kick_members=True)
@@ -381,8 +618,30 @@ async def clear_messages(ctx, amount: int = 10):
     except discord.Forbidden:
         await ctx.send("❌ Je n'ai pas les permissions pour supprimer des messages !")
 
+# Commandes de gestion du ticket
+@bot.command(name='close', aliases=['fermer'])
+@commands.has_permissions(manage_channels=True)
+async def close_ticket_command(ctx: commands.Context):
+    """Ferme le ticket actuel (doit être utilisé dans un canal de ticket)"""
+    if not ctx.channel.name.startswith("ticket-"):
+        return await ctx.send("❌ Cette commande ne peut être utilisée que dans un canal de ticket.")
+    
+    await ctx.send(f"🔒 Ticket fermé par {ctx.author.mention}. Suppression du canal dans 5 secondes...")
+    await asyncio.sleep(5)
+    await ctx.channel.delete(reason=f"Ticket fermé par commande par {ctx.author.display_name}")
 
-# ===== UTILITAIRES (Commandes complètes) =====
+@bot.command(name='add')
+@commands.has_permissions(manage_channels=True)
+async def add_member_to_ticket(ctx: commands.Context, member: discord.Member):
+    """Ajoute un membre au ticket actuel."""
+    if not ctx.channel.name.startswith("ticket-"):
+        return await ctx.send("❌ Cette commande ne peut être utilisée que dans un canal de ticket.")
+    
+    await ctx.channel.set_permissions(member, view_channel=True, send_messages=True, read_message_history=True)
+    await ctx.send(f"✅ {member.mention} a été ajouté au ticket.")
+
+
+# --- UTILITAIRES (Commandes complètes) ---
 
 @bot.command(name='ping')
 async def ping(ctx):
@@ -413,6 +672,66 @@ async def user_info(ctx, membre: discord.Member = None):
     embed.add_field(name=f"Rôles ({len(membre.roles) - 1})", value=" ".join(roles) if roles else "Aucun", inline=False)
     await ctx.send(embed=embed)
 
+@bot.command(name='serverinfo', aliases=['si'])
+async def server_info(ctx: commands.Context):
+    """Affiche les informations générales et statistiques du serveur."""
+    guild = ctx.guild
+    
+    # Calcul des totaux
+    member_count = guild.member_count
+    online_members = len([m for m in guild.members if m.status != discord.Status.offline])
+    bots_count = len([m for m in guild.members if m.bot])
+    text_channels = len(guild.text_channels)
+    voice_channels = len(guild.voice_channels)
+    
+    # Niveaux de boost
+    boost_level = guild.premium_tier
+    boost_count = guild.premium_subscription_count
+    
+    # Création de l'embed
+    embed = discord.Embed(
+        title=f"🏛️ Informations sur le serveur : {guild.name}",
+        color=discord.Color.from_rgb(255, 165, 0), # Orange
+        timestamp=datetime.now()
+    )
+
+    # Propriétaire et date de création
+    embed.set_thumbnail(url=guild.icon.url if guild.icon else None)
+    embed.add_field(name="👑 Propriétaire", value=guild.owner.mention, inline=True)
+    embed.add_field(name="🆔 ID du Serveur", value=guild.id, inline=True)
+    embed.add_field(name="🗓️ Créé le", value=guild.created_at.strftime("%d/%m/%Y"), inline=True)
+    
+    # Statistiques des membres
+    embed.add_field(
+        name="👥 Membres", 
+        value=f"**Total :** {member_count}\n**En ligne :** {online_members}\n**Bots :** {bots_count}", 
+        inline=True
+    )
+
+    # Statistiques des salons
+    embed.add_field(
+        name="💬 Salons", 
+        value=f"**Textuels :** {text_channels}\n**Vocaux :** {voice_channels}\n**Catégories :** {len(guild.categories)}", 
+        inline=True
+    )
+    
+    # Boosts
+    embed.add_field(
+        name="✨ Boosts Nitro", 
+        value=f"**Niveau :** {boost_level}\n**Total :** {boost_count} boosts", 
+        inline=True
+    )
+
+    # Rôles
+    roles_display = len(guild.roles) - 1 # Ne compte pas @everyone
+    embed.add_field(name="🔖 Rôles", value=f"**Total :** {roles_display} rôles", inline=True)
+    
+    # Ajout du pied de page
+    embed.set_footer(text=f"Demandé par {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    
+    await ctx.send(embed=embed)
+
+
 @bot.command(name='help', aliases=['aide', 'h'])
 async def help_command(ctx: commands.Context):
     """Affiche toutes les commandes"""
@@ -425,44 +744,41 @@ async def help_command(ctx: commands.Context):
 
     embed.add_field(
         name="⚙️ Configuration (Admin)",
-        value="`+setlogs #salon` - Salon pour la **journalisation** 🆕\n`+welcomeembed #salon` - Salon pour message **embed**\n`+welcomesimple #salon` - Salon pour message **simple**\n`+leavechat #salon` - Salon des départs\n`+config` - Voir la configuration des salons",
+        value="`+config` - Affiche la configuration actuelle\n`+setlogs #salon` - Salon pour la **journalisation**\n`+setboostchannel #salon` - Salon des remerciements de boost ✨\n`+setticketcategory #catégorie` - Catégorie des tickets\n`+setticketrole @rôle` - Rôle support pour les tickets\n`+sendticketpanel #salon` - Envoie le bouton de ticket\n`+welcomeembed #salon` - Salon de bienvenue (embed)\n`+welcomesimple #salon` - Salon de bienvenue (simple)\n`+leavechat #salon` - Salon des départs",
         inline=False
     )
 
     embed.add_field(
-        name="🛡️ Modération",
-        value="`+ban @membre [raison]`\n`+kick @membre [raison]`\n`+mute @membre [minutes] [raison]`\n`+unmute @membre`\n`+clear [nombre]`",
+        name="🛡️ Modération (Staff)",
+        value="`+ban @membre [raison]`\n`+kick @membre [raison]`\n`+mute @membre [durée en min] [raison]`\n`+unmute @membre`\n`+clear [nombre]` - Supprime des messages\n`+close` - Ferme le ticket actuel\n`+add @membre` - Ajoute un membre au ticket",
         inline=False
     )
 
     embed.add_field(
         name="🔧 Utilitaires",
-        value="`+ping`\n`+avatar [@membre]`\n`+userinfo [@membre]`",
+        value="`+ping`\n`+avatar [@membre]`\n`+userinfo [@membre]`\n`+serverinfo` - **Infos et stats du serveur 📊**", # ✅ NOUVEAU
         inline=False
     )
 
-    embed.set_footer(text=f"Demandé par {ctx.author.display_name}")
+    embed.set_footer(text=f"Demandé par {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
     await ctx.send(embed=embed)
 
-# ===== DÉMARRAGE DU BOT =====
 
+# --- DÉMARRAGE DU BOT ---
+
+# Si vous utilisez un système de "keep-alive" comme Flask
+# keep_alive() 
+
+# Remplacez "VOTRE_TOKEN_DISCORD" par la variable d'environnement ou le token de votre bot
 if __name__ == "__main__":
-    TOKEN = os.getenv('DISCORD_TOKEN')
-
-    if not TOKEN:
-        print("❌ ERREUR : Token Discord non trouvé !")
-        print("📝 Assure-toi que la variable d'environnement 'DISCORD_TOKEN' est correctement définie.")
-        exit(1)
-
-    # 1. Lance le serveur Flask dans un thread pour maintenir le bot actif
-    keep_alive()  
-
-    # 2. Démarre le bot Discord
-    try:
-        bot.run(TOKEN)
-    except discord.errors.LoginFailure:
-        print("❌ ERREUR : Le token est invalide. Vérifie sa valeur.")
-        exit(1)
-    except Exception as e:
-        print(f"❌ Erreur de démarrage inattendue : {e}")
-        exit(1)
+    if 'DISCORD_TOKEN' not in os.environ:
+        print("❌ ERREUR : La variable d'environnement 'DISCORD_TOKEN' n'est pas définie.")
+        print("Veuillez définir votre token Discord pour démarrer le bot.")
+    else:
+        keep_alive() # Démarre le serveur web
+        try:
+            bot.run(os.environ['DISCORD_TOKEN'])
+        except discord.errors.LoginFailure:
+            print("❌ Échec de la connexion : Le token est invalide. Veuillez vérifier la variable DISCORD_TOKEN.")
+        except Exception as e:
+            print(f"❌ Erreur inattendue au démarrage : {e}")
