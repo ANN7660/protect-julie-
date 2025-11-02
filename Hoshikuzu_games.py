@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Hoshikuzu_games_plus.py
-# Games & Fun bot with XP, economy, leaderboard, help, profile
+# Games & Fun bot with XP, economy, leaderboard, help, profile, giveaway
 # Requires: discord.py==2.3.2, requests (optional, used for +meme)
 # Configure DISCORD_BOT_TOKEN in environment variables before running.
 
@@ -42,7 +42,7 @@ class DataManager:
             except Exception as e:
                 print("Data load error:", e)
         # default structure
-        return {"economy": {}, "xp": {}, "cooldowns": {}}
+        return {"economy": {}, "xp": {}, "cooldowns": {}, "giveaways": {}}
 
     async def save(self):
         async with self.lock:
@@ -99,6 +99,31 @@ class DataManager:
         sorted_ = sorted(guild_xp.items(), key=lambda kv: (int(kv[1].get("level", 1)), int(kv[1].get("xp", 0))), reverse=True)
         return [(int(uid), int(info.get("level", 1)), int(info.get("xp", 0))) for uid, info in sorted_[:limit]]
 
+    # giveaway helpers
+    def create_giveaway(self, guild_id: int, message_id: int, prize: str, end_time: int, winners: int):
+        gid = str(guild_id); mid = str(message_id)
+        self.data.setdefault("giveaways", {})[mid] = {
+            "guild_id": gid,
+            "prize": prize,
+            "end_time": end_time,
+            "winners": winners,
+            "participants": []
+        }
+
+    def get_giveaway(self, message_id: int) -> Optional[Dict]:
+        return self.data.get("giveaways", {}).get(str(message_id))
+
+    def add_participant(self, message_id: int, user_id: int):
+        mid = str(message_id); uid = str(user_id)
+        giveaway = self.data.get("giveaways", {}).get(mid)
+        if giveaway and uid not in giveaway["participants"]:
+            giveaway["participants"].append(uid)
+
+    def remove_giveaway(self, message_id: int):
+        mid = str(message_id)
+        if mid in self.data.get("giveaways", {}):
+            del self.data["giveaways"][mid]
+
 data_manager = DataManager()
 
 # -------------------- Bot init --------------------
@@ -106,6 +131,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.guilds = True
+intents.reactions = True
 
 bot = commands.Bot(command_prefix="+", intents=intents, help_command=None)
 bot.data_manager = data_manager
@@ -114,15 +140,31 @@ bot.data_manager = data_manager
 def _now_ts() -> int:
     return int(datetime.datetime.now().timestamp())
 
+def parse_time(time_str: str) -> Optional[int]:
+    """Parse time like 1h, 30m, 2d into seconds"""
+    try:
+        if time_str.endswith('s'):
+            return int(time_str[:-1])
+        elif time_str.endswith('m'):
+            return int(time_str[:-1]) * 60
+        elif time_str.endswith('h'):
+            return int(time_str[:-1]) * 3600
+        elif time_str.endswith('d'):
+            return int(time_str[:-1]) * 86400
+    except:
+        pass
+    return None
+
 # -------------------- Help (single colored embed) --------------------
 @bot.command(name="help")
 async def help_cmd(ctx: commands.Context):
     embed = discord.Embed(title="💎 Hoshikuzu — Jeux & Fun", color=discord.Color.purple())
     embed.add_field(name="🎮 Jeux", value="`+coinflip <bet> [pile/face]`, `+slots <bet>`", inline=False)
     embed.add_field(name="💰 Économie", value="`+balance [@user]`, `+work`, `+daily`, `+give @user <amount>`", inline=False)
-    embed.add_field(name="📈 XP & Niveau", value="`+rank [@user]`, `+level [@user]`", inline=False)
+    embed.add_field(name="📈 XP & Niveau", value="`+rank [@user]`, `+level [@user]`, `+profile [@user]`", inline=False)
     embed.add_field(name="😂 Fun", value="`+8ball <question>`, `+hug [@user]`, `+ship @a @b`, `+meme`", inline=False)
     embed.add_field(name="🏆 Leaderboard", value="`+lb money`, `+lb xp`", inline=False)
+    embed.add_field(name="🎁 Giveaway", value="`+gstart <durée> <gagnants> <prix>`\nEx: `+gstart 1h 2 Nitro`", inline=False)
     embed.set_footer(text="Bot games léger — commandes avec +. Toutes les données sont sauvegardées.")
     await ctx.send(embed=embed)
 
@@ -321,10 +363,93 @@ async def profile_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
     embed.add_field(name="Messages", value=str(r.get("messages", 0)), inline=True)
     await ctx.send(embed=embed)
 
+# -------------------- Giveaway --------------------
+@bot.command(name="gstart")
+@commands.has_permissions(manage_guild=True)
+async def giveaway_start(ctx: commands.Context, duration: str, winners: int, *, prize: str):
+    """Lance un giveaway. Ex: +gstart 1h 2 Discord Nitro"""
+    seconds = parse_time(duration)
+    if not seconds:
+        return await ctx.send("❌ Durée invalide ! Utilise: 30s, 5m, 1h, 2d")
+    
+    if winners < 1:
+        return await ctx.send("❌ Il faut au moins 1 gagnant !")
+    
+    end_time = _now_ts() + seconds
+    
+    # Créer l'embed du giveaway
+    embed = discord.Embed(
+        title="🎉 GIVEAWAY 🎉",
+        description=f"**Prix:** {prize}\n**Gagnants:** {winners}\n**Temps restant:** {duration}\n\nRéagis avec 🎁 pour participer !",
+        color=discord.Color.green()
+    )
+    embed.set_footer(text=f"Se termine dans {duration}")
+    embed.timestamp = datetime.datetime.fromtimestamp(end_time)
+    
+    msg = await ctx.send(embed=embed)
+    await msg.add_reaction("🎁")
+    
+    # Sauvegarder le giveaway
+    data_manager.create_giveaway(ctx.guild.id, msg.id, prize, end_time, winners)
+    await data_manager.save()
+    
+    # Attendre la fin
+    await asyncio.sleep(seconds)
+    
+    # Récupérer les participants
+    giveaway = data_manager.get_giveaway(msg.id)
+    if not giveaway:
+        return
+    
+    try:
+        msg = await ctx.channel.fetch_message(msg.id)
+        reaction = discord.utils.get(msg.reactions, emoji="🎁")
+        
+        if reaction:
+            users = []
+            async for user in reaction.users():
+                if not user.bot:
+                    users.append(user)
+            
+            if len(users) == 0:
+                await ctx.send("❌ Aucun participant au giveaway !")
+            elif len(users) < winners:
+                winners_list = users
+                mentions = " ".join([u.mention for u in winners_list])
+                await ctx.send(f"🎉 Pas assez de participants ! Gagnant(s): {mentions}\n**Prix:** {prize}")
+            else:
+                winners_list = random.sample(users, winners)
+                mentions = " ".join([u.mention for u in winners_list])
+                await ctx.send(f"🎉 Félicitations ! Gagnant(s): {mentions}\n**Prix:** {prize}")
+            
+            # Update embed
+            embed = msg.embeds[0]
+            embed.description = f"**Prix:** {prize}\n**Gagnants:** {', '.join([u.mention for u in winners_list]) if users else 'Aucun'}\n\n✅ Giveaway terminé !"
+            embed.color = discord.Color.red()
+            await msg.edit(embed=embed)
+    
+    except Exception as e:
+        print(f"Erreur giveaway: {e}")
+    
+    finally:
+        data_manager.remove_giveaway(msg.id)
+        await data_manager.save()
+
 # -------------------- Events --------------------
 @bot.event
 async def on_ready():
     print(f"[GAMES PLUS] connecté comme {bot.user} ({bot.user.id})")
+
+@bot.event
+async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
+    if user.bot:
+        return
+    
+    # Vérifier si c'est un giveaway
+    giveaway = data_manager.get_giveaway(reaction.message.id)
+    if giveaway and str(reaction.emoji) == "🎁":
+        data_manager.add_participant(reaction.message.id, user.id)
+        await data_manager.save()
 
 # -------------------- Run --------------------
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
