@@ -156,7 +156,7 @@ async def daily(ctx):
 async def give(ctx, member: discord.Member, amount: int):
     if amount <= 0: return await ctx.send("Montant invalide.")
     bal_from = data.get_balance(ctx.guild.id, ctx.author.id)
-    if bal_from < amount: return await ctx.send("Tu n’as pas assez d’argent.")
+    if bal_from < amount: return await ctx.send("Tu n'as pas assez d'argent.")
     await data.set_balance(ctx.guild.id, ctx.author.id, bal_from - amount)
     await data.set_balance(ctx.guild.id, member.id, data.get_balance(ctx.guild.id, member.id) + amount)
     await ctx.send(f"✅ {ctx.author.mention} a donné **{amount}** coins à {member.mention}.")
@@ -166,20 +166,20 @@ async def give(ctx, member: discord.Member, amount: int):
 async def coinflip(ctx, bet: int, choice: Optional[str] = None):
     if bet <= 0: return await ctx.send("❌ Pari invalide.")
     bal = data.get_balance(ctx.guild.id, ctx.author.id)
-    if bal < bet: return await ctx.send("❌ Pas assez d’argent.")
+    if bal < bet: return await ctx.send("❌ Pas assez d'argent.")
     res = random.choice(["pile", "face"])
     if choice and choice.lower() == res:
         await data.set_balance(ctx.guild.id, ctx.author.id, bal + bet)
-        await ctx.send(f"🎉 C’était **{res}** ! Tu gagnes {bet} coins !")
+        await ctx.send(f"🎉 C'était **{res}** ! Tu gagnes {bet} coins !")
     else:
         await data.set_balance(ctx.guild.id, ctx.author.id, bal - bet)
-        await ctx.send(f"😢 C’était **{res}**. Tu perds {bet} coins.")
+        await ctx.send(f"😢 C'était **{res}**. Tu perds {bet} coins.")
 
 @bot.command()
 async def slots(ctx, bet: int):
     if bet <= 0: return await ctx.send("Pari invalide.")
     bal = data.get_balance(ctx.guild.id, ctx.author.id)
-    if bal < bet: return await ctx.send("Pas assez d’argent.")
+    if bal < bet: return await ctx.send("Pas assez d'argent.")
     s = ["🍒","🍋","🔔","⭐","7️⃣"]
     r = [random.choice(s) for _ in range(3)]
     if len(set(r)) == 1:
@@ -300,9 +300,30 @@ async def on_message(msg):
     res = data.add_xp(msg.guild.id, msg.author.id, xp_gain)
     if res["leveled"]:
         ch = data.get_levelup_channel(msg.guild.id)
+        level_roles = data.get_level_roles(msg.guild.id)
+        
+        # Message de level-up
         if ch:
             chan = bot.get_channel(ch)
-            await chan.send(f"🌟 {msg.author.mention} est passé niveau **{res['level']}** !")
+            if chan:
+                await chan.send(f"🌟 {msg.author.mention} est passé niveau **{res['level']}** !")
+        
+        # Attribution du rôle si configuré pour ce niveau
+        if res["level"] in level_roles:
+            role_id = level_roles[res["level"]]
+            role = msg.guild.get_role(role_id)
+            if role:
+                try:
+                    await msg.author.add_roles(role)
+                    # Notification dans le salon de level-up
+                    if ch:
+                        chan = bot.get_channel(ch)
+                        if chan:
+                            await chan.send(f"🎭 {msg.author.mention} a reçu le rôle {role.mention} pour avoir atteint le niveau **{res['level']}** !")
+                except discord.Forbidden:
+                    print(f"Impossible d'attribuer le rôle {role.name} à {msg.author}")
+                except Exception as e:
+                    print(f"Erreur lors de l'attribution du rôle: {e}")
 
 @bot.event
 async def on_ready():
