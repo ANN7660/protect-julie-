@@ -1,298 +1,273 @@
 #!/usr/bin/env python3
-# 🌸 Hoshikuzu — Bot Jeux, Économie, XP, Giveaways & Fun 🌸
-# Compatible Python 3.11+ et discord.py==2.3.2
+# 💫 Hoshikuzu — Jeux & Fun Bot complet
 
 import os, json, random, asyncio, datetime, threading, http.server, socketserver
 from typing import Optional, Dict, Any, List
 import discord
 from discord.ext import commands
 
-# --- Keep Alive (Render / Replit)
+# === Keep Alive (Render) ===
 def keep_alive():
     try:
         port = int(os.environ.get("PORT", 8080))
-    except Exception:
+    except:
         port = 8080
     class QuietHandler(http.server.SimpleHTTPRequestHandler):
-        def log_message(self, format, *args): return
+        def log_message(self, *a): pass
     with socketserver.TCPServer(("", port), QuietHandler) as httpd:
-        print(f"[keep-alive] HTTP running on port {port}")
+        print(f"[keep-alive] HTTP server running on port {port}")
         httpd.serve_forever()
 threading.Thread(target=keep_alive, daemon=True).start()
 
-# --- Data Manager
+# === Data Manager ===
 class DataManager:
     def __init__(self, filename="hoshikuzu_data.json"):
         self.filename = filename
         self.data = self._load()
+        self.lock = asyncio.Lock()
 
     def _load(self):
         if os.path.exists(self.filename):
             try:
                 with open(self.filename, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except:
-                pass
-        return {"economy": {}, "xp": {}, "cooldowns": {}, "xp_cooldowns": {}, "level_roles": {}, "config": {}, "giveaways": {}}
+            except Exception as e:
+                print("load error:", e)
+        return {"economy": {}, "xp": {}, "cooldowns": {}, "giveaways": {}, "config": {}, "level_roles": {}}
 
-    def save(self):
-        with open(self.filename, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, indent=2, ensure_ascii=False)
+    async def save(self):
+        async with self.lock:
+            with open(self.filename, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, indent=2, ensure_ascii=False)
 
-    # --- Economy
-    def get_balance(self, gid, uid): return int(self.data.setdefault("economy", {}).setdefault(str(gid), {}).get(str(uid), 0))
-    def set_balance(self, gid, uid, amount):
-        self.data.setdefault("economy", {}).setdefault(str(gid), {})[str(uid)] = amount
-        self.save()
+    # ==== Économie ====
+    def get_balance(self, gid, uid): return int(self.data.setdefault("economy", {}).setdefault(str(gid), {}).setdefault(str(uid), 0))
+    async def set_balance(self, gid, uid, amt):
+        self.data.setdefault("economy", {}).setdefault(str(gid), {})[str(uid)] = int(amt)
+        await self.save()
 
-    # --- XP
+    # ==== XP & Levels ====
     def add_xp(self, gid, uid, amount):
-        u = self.data.setdefault("xp", {}).setdefault(str(gid), {}).setdefault(str(uid), {"xp":0,"level":1,"messages":0})
-        u["xp"] += amount; u["messages"] += 1
+        g = str(gid); u = str(uid)
+        xp = self.data.setdefault("xp", {}).setdefault(g, {}).setdefault(u, {"xp": 0, "level": 1, "messages": 0})
+        xp["xp"] += amount; xp["messages"] += 1
         leveled = False
-        while u["xp"] >= u["level"] * 100:
-            u["xp"] -= u["level"] * 100
-            u["level"] += 1; leveled = True
-        self.save(); return u, leveled
+        while xp["xp"] >= xp["level"] * 100:
+            xp["xp"] -= xp["level"] * 100
+            xp["level"] += 1
+            leveled = True
+        return {"leveled": leveled, "level": xp["level"], "xp": xp["xp"]}
 
-    def get_rank(self, gid, uid): return self.data.get("xp", {}).get(str(gid), {}).get(str(uid), {"xp":0,"level":1,"messages":0})
+    def get_rank(self, gid, uid): 
+        return self.data.setdefault("xp", {}).setdefault(str(gid), {}).get(str(uid), {"xp": 0, "level": 1, "messages": 0})
 
-    # --- Level roles
-    def add_level_role(self, gid, level, rid):
-        self.data.setdefault("level_roles", {}).setdefault(str(gid), {})[str(level)] = rid; self.save()
-    def remove_level_role(self, gid, level):
-        self.data.setdefault("level_roles", {}).setdefault(str(gid), {}).pop(str(level), None); self.save()
-    def get_level_roles(self, gid):
-        return {int(lvl): rid for lvl, rid in self.data.get("level_roles", {}).get(str(gid), {}).items()}
+    def get_levelup_channel(self, gid): return self.data.get("config", {}).get(str(gid), {}).get("levelup_channel")
+    def set_levelup_channel(self, gid, cid): self.data.setdefault("config", {}).setdefault(str(gid), {})["levelup_channel"] = cid
 
-    # --- Giveaways
+    # ==== Level Roles ====
+    def add_level_role(self, gid, lvl, rid): self.data.setdefault("level_roles", {}).setdefault(str(gid), {})[str(lvl)] = rid
+    def remove_level_role(self, gid, lvl): self.data.setdefault("level_roles", {}).setdefault(str(gid), {}).pop(str(lvl), None)
+    def get_level_roles(self, gid): return {int(l): int(r) for l, r in self.data.get("level_roles", {}).get(str(gid), {}).items()}
+
+    # ==== Giveaways ====
     def create_giveaway(self, gid, mid, prize, end, winners):
-        self.data.setdefault("giveaways", {})[str(mid)] = {"gid":gid,"prize":prize,"end":end,"winners":winners,"participants":[]}; self.save()
+        self.data.setdefault("giveaways", {})[str(mid)] = {"guild": gid, "prize": prize, "end": end, "winners": winners, "users": []}
     def get_giveaway(self, mid): return self.data.get("giveaways", {}).get(str(mid))
-    def add_participant(self, mid, uid):
+    def add_user(self, mid, uid):
         g = self.get_giveaway(mid)
-        if g and str(uid) not in g["participants"]:
-            g["participants"].append(str(uid)); self.save()
-    def remove_giveaway(self, mid): self.data.get("giveaways", {}).pop(str(mid), None); self.save()
+        if g and str(uid) not in g["users"]: g["users"].append(str(uid))
 
 data = DataManager()
 
-# --- Bot init
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-intents.guilds = True
-intents.reactions = True
-
+# === Bot Init ===
+intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="+", intents=intents, help_command=None)
 
-# --- Utils
-def now(): return int(datetime.datetime.now().timestamp())
-def parse_time(t):
-    m = {"s":1,"m":60,"h":3600,"d":86400}
-    try: return int(t[:-1])*m.get(t[-1],0)
-    except: return None
-
-# --- Presence
-@bot.event
-async def on_ready():
-    await bot.change_presence(activity=discord.Game(name="Hoshikuzu | +help"))
-    print(f"[Hoshikuzu] Connecté en tant que {bot.user}")
-
-# --- HELP
+# === Help ===
 @bot.command()
 async def help(ctx):
-    e = discord.Embed(title="🌸 Commandes Hoshikuzu", color=discord.Color.purple())
+    e = discord.Embed(title="💎 Hoshikuzu — Jeux & Fun", color=discord.Color.purple())
     e.add_field(name="🎮 Jeux", value="`+coinflip <bet> [pile/face]`, `+slots <bet>`", inline=False)
-    e.add_field(name="💰 Économie", value="`+balance [@user]`, `+work`, `+daily`, `+give @user <montant>`", inline=False)
-    e.add_field(name="📈 XP & Niveau", value="`+rank [@user]`, `+level [@user]`, `+profile [@user]`\n`+setlevelup #salon` — définir le salon level up\n`+addrole <niveau> @rôle`, `+removerole <niveau>`, `+listroles`", inline=False)
+    e.add_field(name="💰 Économie", value="`+balance`, `+work`, `+daily`, `+give @user <amount>`", inline=False)
+    e.add_field(name="📈 XP & Niveau", value="`+rank`, `+level`, `+profile`\n`+setlevelup #salon`\n`+addrole <niveau> @role`\n`+removerole <niveau>`\n`+listroles`", inline=False)
     e.add_field(name="😂 Fun", value="`+8ball <question>`, `+hug [@user]`, `+ship @a @b`, `+meme`", inline=False)
-    e.add_field(name="🏆 Classements", value="`+lb money`, `+lb xp`", inline=False)
+    e.add_field(name="🏆 Leaderboard", value="`+lb money`, `+lb xp`", inline=False)
     e.add_field(name="🎁 Giveaway", value="`+gstart <durée> <gagnants> <prix>`\nEx: `+gstart 1h 2 Nitro`", inline=False)
-    e.set_footer(text="Bot Hoshikuzu — amuse-toi bien 💫")
+    e.set_footer(text="hoshikuzu | +help 🌙")
     await ctx.send(embed=e)
 
-# --- ÉCONOMIE
-COOLDOWNS = {"work":7200,"daily":86400}
-
+# === Économie ===
 @bot.command()
-async def balance(ctx, member: discord.Member=None):
-    m = member or ctx.author
-    await ctx.send(f"💰 {m.mention} a **{data.get_balance(ctx.guild.id, m.id)}** coins.")
+async def balance(ctx, member: Optional[discord.Member] = None):
+    member = member or ctx.author
+    await ctx.send(f"💰 {member.mention} a **{data.get_balance(ctx.guild.id, member.id)}** coins")
 
 @bot.command()
 async def work(ctx):
-    uid, gid = ctx.author.id, ctx.guild.id
-    earn = random.randint(50,150)
-    bal = data.get_balance(gid, uid)
-    data.set_balance(gid, uid, bal+earn)
-    await ctx.send(f"💼 Tu as travaillé et gagné **{earn}** coins !")
+    earn = random.randint(50, 150)
+    bal = data.get_balance(ctx.guild.id, ctx.author.id) + earn
+    await data.set_balance(ctx.guild.id, ctx.author.id, bal)
+    await ctx.send(f"💼 Tu as gagné **{earn}** coins ! Total: {bal}")
 
 @bot.command()
 async def daily(ctx):
-    uid, gid = ctx.author.id, ctx.guild.id
     bonus = 250
-    bal = data.get_balance(gid, uid)
-    data.set_balance(gid, uid, bal+bonus)
-    await ctx.send(f"🎁 Tu as récupéré ton daily : **{bonus}** coins !")
+    bal = data.get_balance(ctx.guild.id, ctx.author.id) + bonus
+    await data.set_balance(ctx.guild.id, ctx.author.id, bal)
+    await ctx.send(f"🎁 Daily collecté : **{bonus}** coins ! Total: {bal}")
 
 @bot.command()
-async def give(ctx, member: discord.Member, amount:int):
-    if amount<=0: return await ctx.send("Montant invalide.")
-    gid=ctx.guild.id
-    b1=data.get_balance(gid, ctx.author.id)
-    if b1<amount: return await ctx.send("Tu n'as pas assez de coins.")
-    b2=data.get_balance(gid, member.id)
-    data.set_balance(gid, ctx.author.id, b1-amount)
-    data.set_balance(gid, member.id, b2+amount)
-    await ctx.send(f"✅ {ctx.author.mention} a donné **{amount}** coins à {member.mention} !")
+async def give(ctx, member: discord.Member, amount: int):
+    if amount <= 0: return await ctx.send("Montant invalide.")
+    bal_from = data.get_balance(ctx.guild.id, ctx.author.id)
+    if bal_from < amount: return await ctx.send("Tu n’as pas assez d’argent.")
+    await data.set_balance(ctx.guild.id, ctx.author.id, bal_from - amount)
+    await data.set_balance(ctx.guild.id, member.id, data.get_balance(ctx.guild.id, member.id) + amount)
+    await ctx.send(f"✅ {ctx.author.mention} a donné **{amount}** coins à {member.mention}.")
 
-# --- JEUX
+# === Jeux ===
 @bot.command()
-async def coinflip(ctx, bet:int, guess:str=None):
-    if bet<=0: return await ctx.send("Montant invalide.")
-    bal=data.get_balance(ctx.guild.id, ctx.author.id)
-    if bal<bet: return await ctx.send("Pas assez de coins.")
-    result=random.choice(["pile","face"])
-    if guess and guess.lower()==result:
-        data.set_balance(ctx.guild.id, ctx.author.id, bal+bet)
-        await ctx.send(f"🎉 C'est **{result}** ! Tu gagnes **{bet}** !")
+async def coinflip(ctx, bet: int, choice: Optional[str] = None):
+    if bet <= 0: return await ctx.send("❌ Pari invalide.")
+    bal = data.get_balance(ctx.guild.id, ctx.author.id)
+    if bal < bet: return await ctx.send("❌ Pas assez d’argent.")
+    res = random.choice(["pile", "face"])
+    if choice and choice.lower() == res:
+        await data.set_balance(ctx.guild.id, ctx.author.id, bal + bet)
+        await ctx.send(f"🎉 C’était **{res}** ! Tu gagnes {bet} coins !")
     else:
-        data.set_balance(ctx.guild.id, ctx.author.id, bal-bet)
-        await ctx.send(f"😞 C'est **{result}** ! Tu perds **{bet}**.")
+        await data.set_balance(ctx.guild.id, ctx.author.id, bal - bet)
+        await ctx.send(f"😢 C’était **{res}**. Tu perds {bet} coins.")
 
 @bot.command()
-async def slots(ctx, bet:int):
-    if bet<=0: return await ctx.send("Montant invalide.")
-    bal=data.get_balance(ctx.guild.id, ctx.author.id)
-    if bal<bet: return await ctx.send("Pas assez de coins.")
-    symbols=["🍒","🍋","🔔","⭐","7️⃣"]
-    res=[random.choice(symbols) for _ in range(3)]
-    if len(set(res))==1:
-        win=bet*5; data.set_balance(ctx.guild.id, ctx.author.id, bal+win)
-        await ctx.send(f"🎰 {' '.join(res)} — JACKPOT ! +{win} coins")
-    elif len(set(res))==2:
-        win=int(bet*1.5); data.set_balance(ctx.guild.id, ctx.author.id, bal+win)
-        await ctx.send(f"🎰 {' '.join(res)} — Gagné {win} coins !")
+async def slots(ctx, bet: int):
+    if bet <= 0: return await ctx.send("Pari invalide.")
+    bal = data.get_balance(ctx.guild.id, ctx.author.id)
+    if bal < bet: return await ctx.send("Pas assez d’argent.")
+    s = ["🍒","🍋","🔔","⭐","7️⃣"]
+    r = [random.choice(s) for _ in range(3)]
+    if len(set(r)) == 1:
+        win = bet * 5
+        msg = f"🎰 {' '.join(r)} — JACKPOT ! Tu gagnes {win} coins !"
+        await data.set_balance(ctx.guild.id, ctx.author.id, bal + win)
+    elif len(set(r)) == 2:
+        win = int(bet * 1.5)
+        msg = f"🎰 {' '.join(r)} — Tu gagnes {win} coins !"
+        await data.set_balance(ctx.guild.id, ctx.author.id, bal + win)
     else:
-        data.set_balance(ctx.guild.id, ctx.author.id, bal-bet)
-        await ctx.send(f"🎰 {' '.join(res)} — Perdu {bet} coins.")
+        msg = f"🎰 {' '.join(r)} — Tu perds {bet} coins."
+        await data.set_balance(ctx.guild.id, ctx.author.id, bal - bet)
+    await ctx.send(msg)
 
-# --- FUN
+# === XP & Level Roles ===
 @bot.command()
-async def eightball(ctx, *, question:str):
-    resp=["Oui.","Non.","Peut-être.","Certainement !","Peu probable.","Absolument pas."]
-    await ctx.send(f"🎱 **Question :** {question}\n**Réponse :** {random.choice(resp)}")
-
-@bot.command()
-async def hug(ctx, member: discord.Member=None):
-    m=member or ctx.author
-    if m==ctx.author: await ctx.send(f"{ctx.author.mention} se donne un câlin 🤗")
-    else: await ctx.send(f"{ctx.author.mention} fait un câlin à {m.mention} 🤗")
+async def setlevelup(ctx, channel: discord.TextChannel):
+    data.set_levelup_channel(ctx.guild.id, channel.id)
+    await data.save()
+    await ctx.send(f"✅ Messages de level-up envoyés dans {channel.mention}")
 
 @bot.command()
-async def ship(ctx, a:discord.Member,b:discord.Member):
-    score=random.randint(0,100)
-    heart="💖" if score>70 else "💛" if score>40 else "💔"
-    await ctx.send(f"💞 Compatibilité entre {a.display_name} et {b.display_name} : **{score}%** {heart}")
+async def rank(ctx, member: Optional[discord.Member] = None):
+    member = member or ctx.author
+    r = data.get_rank(ctx.guild.id, member.id)
+    await ctx.send(f"📊 {member.mention} — Niveau {r['level']} ({r['xp']} XP)")
 
 @bot.command()
-async def meme(ctx):
-    fallback=["https://i.imgur.com/1J9Z6.jpg","https://i.imgur.com/8pQ0Z.jpg","https://i.imgur.com/2c3KX.jpg"]
-    try:
-        import requests
-        r=requests.get("https://meme-api.com/gimme",timeout=5)
-        d=r.json()
-        e=discord.Embed(title=d["title"], description=f"r/{d['subreddit']}", color=discord.Color.random())
-        e.set_image(url=d["url"]); await ctx.send(embed=e)
-    except: await ctx.send(random.choice(fallback))
-
-# --- XP / RANK
-@bot.command()
-async def rank(ctx, member:discord.Member=None):
-    m=member or ctx.author; r=data.get_rank(ctx.guild.id,m.id)
-    await ctx.send(f"📊 {m.display_name} — Niveau **{r['level']}** • XP {r['xp']}/{r['level']*100} • Msg {r['messages']}")
-
-@bot.command()
-async def level(ctx, member:discord.Member=None): await rank(ctx, member)
-
-@bot.command()
-async def profile(ctx, member:discord.Member=None):
-    m=member or ctx.author; r=data.get_rank(ctx.guild.id,m.id); bal=data.get_balance(ctx.guild.id,m.id)
-    e=discord.Embed(title=f"👤 Profil de {m.display_name}", color=discord.Color.blurple())
-    e.set_thumbnail(url=m.display_avatar.url)
-    e.add_field(name="Niveau", value=r['level']); e.add_field(name="XP", value=r['xp'])
-    e.add_field(name="Coins", value=bal); e.add_field(name="Messages", value=r['messages'])
-    await ctx.send(embed=e)
-
-# --- LEVEL ROLES
-@bot.command()
-@commands.has_permissions(manage_roles=True)
-async def addrole(ctx, level:int, role:discord.Role):
+async def addrole(ctx, level: int, role: discord.Role):
     data.add_level_role(ctx.guild.id, level, role.id)
-    await ctx.send(f"✅ Le rôle {role.mention} sera donné au niveau **{level}**.")
+    await data.save()
+    await ctx.send(f"🎭 Rôle {role.mention} ajouté pour le niveau {level}")
 
 @bot.command()
-@commands.has_permissions(manage_roles=True)
-async def removerole(ctx, level:int):
+async def removerole(ctx, level: int):
     data.remove_level_role(ctx.guild.id, level)
-    await ctx.send(f"✅ Le rôle du niveau {level} a été retiré.")
+    await data.save()
+    await ctx.send(f"🗑️ Rôle supprimé pour le niveau {level}")
 
 @bot.command()
 async def listroles(ctx):
-    roles=data.get_level_roles(ctx.guild.id)
-    if not roles: return await ctx.send("📋 Aucun rôle configuré.")
-    txt="\n".join([f"Niveau {lvl} → <@&{rid}>" for lvl,rid in roles.items()])
-    await ctx.send(f"🎭 **Rôles par niveau :**\n{txt}")
+    roles = data.get_level_roles(ctx.guild.id)
+    if not roles: return await ctx.send("Aucun rôle configuré.")
+    msg = "\n".join([f"Niveau {lvl} → <@&{rid}>" for lvl, rid in roles.items()])
+    await ctx.send(f"🎭 Rôles configurés :\n{msg}")
 
-# --- GIVEAWAY
+# === Fun ===
 @bot.command()
-@commands.has_permissions(manage_guild=True)
-async def gstart(ctx, duration:str, winners:int, *, prize:str):
-    sec=parse_time(duration)
-    if not sec: return await ctx.send("❌ Durée invalide. Ex: 1h, 30m")
-    end=now()+sec
-    e=discord.Embed(title="🎉 GIVEAWAY 🎉", description=f"**Prix:** {prize}\n**Gagnants:** {winners}\nRéagis 🎁 pour participer !", color=discord.Color.green())
-    msg=await ctx.send(embed=e); await msg.add_reaction("🎁")
-    data.create_giveaway(ctx.guild.id, msg.id, prize, end, winners)
-    await asyncio.sleep(sec)
-    g=data.get_giveaway(msg.id)
-    if not g: return
-    msg=await ctx.channel.fetch_message(msg.id)
-    users=[u async for u in msg.reactions[0].users() if not u.bot]
-    if not users: await ctx.send("❌ Aucun participant !"); return
-    winners_list=random.sample(users, min(winners,len(users)))
-    await ctx.send("🎊 Gagnant(s) : " + ", ".join([u.mention for u in winners_list]))
-    data.remove_giveaway(msg.id)
+async def eightball(ctx, *, question):
+    rep = random.choice(["Oui.", "Non.", "Peut-être.", "Absolument.", "Jamais."])
+    await ctx.send(f"🎱 Question: {question}\nRéponse: {rep}")
 
-# --- Leaderboards
 @bot.command()
-async def lb(ctx, kind:str="money"):
-    if kind=="money":
-        e=sorted(data.data.get("economy",{}).get(str(ctx.guild.id),{}).items(), key=lambda x:int(x[1]), reverse=True)[:10]
-        txt="\n".join([f"{i+1}. <@{uid}> — {v} coins" for i,(uid,v) in enumerate(e)])
-        await ctx.send(embed=discord.Embed(title="🏆 Top Riches", description=txt, color=discord.Color.gold()))
-    elif kind=="xp":
-        e=data.data.get("xp",{}).get(str(ctx.guild.id),{})
-        sort=sorted(e.items(), key=lambda kv:(kv[1]['level'],kv[1]['xp']), reverse=True)[:10]
-        txt="\n".join([f"{i+1}. <@{uid}> — Niveau {v['level']} ({v['xp']} XP)" for i,(uid,v) in enumerate(sort)])
-        await ctx.send(embed=discord.Embed(title="📈 Top XP", description=txt, color=discord.Color.green()))
+async def hug(ctx, member: Optional[discord.Member] = None):
+    member = member or ctx.author
+    if member == ctx.author: await ctx.send(f"{ctx.author.mention} se câline lui-même 🤗")
+    else: await ctx.send(f"{ctx.author.mention} fait un câlin à {member.mention} 🤗")
 
-# --- XP gain
+@bot.command()
+async def ship(ctx, a: discord.Member, b: discord.Member):
+    score = random.randint(0, 100)
+    emoji = "💖" if score > 70 else "💔" if score < 30 else "💛"
+    await ctx.send(f"💞 Compatibilité {a.display_name} & {b.display_name} : {score}% {emoji}")
+
+@bot.command()
+async def meme(ctx):
+    try:
+        import requests
+        r = requests.get("https://meme-api.com/gimme", timeout=5).json()
+        e = discord.Embed(title=r['title'], color=discord.Color.random())
+        e.set_image(url=r['url'])
+        await ctx.send(embed=e)
+    except: await ctx.send("Erreur de meme API 😅")
+
+# === Leaderboard ===
+@bot.command()
+async def lb(ctx, typ: Optional[str] = "money"):
+    if typ == "money":
+        top = sorted(data.data["economy"].get(str(ctx.guild.id), {}).items(), key=lambda x: int(x[1]), reverse=True)[:10]
+        desc = "\n".join([f"{i+1}. <@{uid}> — {amt} coins" for i, (uid, amt) in enumerate(top)])
+        await ctx.send(embed=discord.Embed(title="🏆 Top Riches", description=desc, color=discord.Color.gold()))
+    else:
+        top = sorted(data.data["xp"].get(str(ctx.guild.id), {}).items(), key=lambda x: x[1]["level"], reverse=True)[:10]
+        desc = "\n".join([f"{i+1}. <@{uid}> — niveau {x['level']}" for i,(uid,x) in enumerate(top)])
+        await ctx.send(embed=discord.Embed(title="📈 Top XP", description=desc, color=discord.Color.green()))
+
+# === Giveaway ===
+@bot.command()
+async def gstart(ctx, duration: str, winners: int, *, prize: str):
+    units = {'s':1,'m':60,'h':3600,'d':86400}
+    t = int(duration[:-1]) * units.get(duration[-1],1)
+    end = int(datetime.datetime.now().timestamp()) + t
+    e = discord.Embed(title="🎉 GIVEAWAY 🎉", description=f"**{prize}**\nDurée: {duration}\nRéagis 🎁 pour participer !", color=discord.Color.green())
+    m = await ctx.send(embed=e); await m.add_reaction("🎁")
+    data.create_giveaway(ctx.guild.id, m.id, prize, end, winners)
+    await data.save()
+    await asyncio.sleep(t)
+    msg = await ctx.channel.fetch_message(m.id)
+    users = [u async for u in msg.reactions[0].users() if not u.bot]
+    if users:
+        win = random.sample(users, min(len(users), winners))
+        await ctx.send(f"🎊 Gagnant(s): {' '.join(u.mention for u in win)} — {prize}")
+    else:
+        await ctx.send("❌ Aucun participant.")
+        
+# === Events ===
 @bot.event
 async def on_message(msg):
-    if msg.author.bot or not msg.guild: return
-    if random.random()<0.6: # gain aléatoire
-        res, up=data.add_xp(msg.guild.id, msg.author.id, random.randint(5,15))
-        if up:
-            roles=data.get_level_roles(msg.guild.id)
-            if res['level'] in roles:
-                role=msg.guild.get_role(roles[res['level']])
-                if role: await msg.author.add_roles(role)
-            await msg.channel.send(f"🎉 {msg.author.mention} est passé niveau **{res['level']}** !")
+    if msg.author.bot: return
     await bot.process_commands(msg)
+    res = data.add_xp(msg.guild.id, msg.author.id, random.randint(5,15))
+    if res["leveled"]:
+        ch = data.get_levelup_channel(msg.guild.id)
+        if ch:
+            chan = bot.get_channel(ch)
+            await chan.send(f"🌟 {msg.author.mention} est passé niveau **{res['level']}** !")
 
-# --- Run
-TOKEN=os.getenv("DISCORD_BOT_TOKEN")
-if not TOKEN: print("❌ Token non défini.")
+@bot.event
+async def on_ready():
+    await bot.change_presence(activity=discord.Game("hoshikuzu | +help"))
+    print(f"[Hoshikuzu] Connecté comme {bot.user}")
+
+# === Run ===
+TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+if not TOKEN: print("❌ Token non défini")
 else: bot.run(TOKEN)
