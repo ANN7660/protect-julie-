@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-# Hoshikuzu_games_plus.py
-# Games & Fun bot with XP, economy, leaderboard, help, profile, giveaway
-# Requires: discord.py==2.3.2, requests (optional, used for +meme)
-# Configure DISCORD_BOT_TOKEN in environment variables before running.
+# hoshikuzu_games_plus.py
+# Fusion complète des deux versions "Games & Fun" que tu as envoyées.
+# Requiert: discord.py==2.3.2, requests (optionnel pour +meme)
+# Configure DISCORD_BOT_TOKEN dans les variables d'environnement avant de lancer.
 
-import os, json, random, asyncio, datetime, threading, http.server, socketserver
+import os
+import json
+import random
+import asyncio
+import datetime
+import threading
+import http.server
+import socketserver
 from typing import Optional, Dict, Any, List
 
 import discord
 from discord.ext import commands
 
-# -------------------- Keep-alive (Render) --------------------
+# -------------------- Keep-alive (Render-compatible) --------------------
 def keep_alive():
     try:
         port = int(os.environ.get("PORT", 8080))
@@ -42,12 +49,50 @@ class DataManager:
             except Exception as e:
                 print("Data load error:", e)
         # default structure
-        return {"economy": {}, "xp": {}, "cooldowns": {}, "giveaways": {}}
+        return {
+            "economy": {},
+            "xp": {},
+            "cooldowns": {},
+            "giveaways": {},
+            "config": {},
+            "xp_cooldowns": {},
+            "level_roles": {}
+        }
 
     async def save(self):
         async with self.lock:
-            with open(self.filename, "w", encoding="utf-8") as f:
-                json.dump(self.data, f, indent=2, ensure_ascii=False)
+            try:
+                with open(self.filename, "w", encoding="utf-8") as f:
+                    json.dump(self.data, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                print("Failed saving data:", e)
+
+    # config helpers
+    def get_levelup_channel(self, guild_id: int) -> Optional[int]:
+        return self.data.get("config", {}).get(str(guild_id), {}).get("levelup_channel")
+
+    def set_levelup_channel(self, guild_id: int, channel_id: int):
+        self.data.setdefault("config", {}).setdefault(str(guild_id), {})["levelup_channel"] = channel_id
+
+    # level roles helpers
+    def add_level_role(self, guild_id: int, level: int, role_id: int):
+        gid = str(guild_id)
+        self.data.setdefault("level_roles", {}).setdefault(gid, {})[str(level)] = role_id
+
+    def remove_level_role(self, guild_id: int, level: int):
+        gid = str(guild_id)
+        level_roles = self.data.setdefault("level_roles", {}).setdefault(gid, {})
+        if str(level) in level_roles:
+            del level_roles[str(level)]
+
+    def get_level_roles(self, guild_id: int) -> Dict[int, int]:
+        gid = str(guild_id)
+        roles = self.data.get("level_roles", {}).get(gid, {})
+        return {int(lvl): int(role_id) for lvl, role_id in roles.items()}
+
+    def get_role_for_level(self, guild_id: int, level: int) -> Optional[int]:
+        gid = str(guild_id)
+        return self.data.get("level_roles", {}).get(gid, {}).get(str(level))
 
     # economy helpers
     def get_balance(self, guild_id: int, user_id: int) -> int:
@@ -77,6 +122,18 @@ class DataManager:
         gid = str(guild_id); uid = str(user_id)
         user = self.data.setdefault("xp", {}).setdefault(gid, {}).get(uid, {"xp": 0, "level": 1, "messages": 0})
         return {"xp": user.get("xp", 0), "level": user.get("level", 1), "messages": user.get("messages", 0)}
+
+    # xp cooldown (per user per guild)
+    def can_gain_xp(self, guild_id: int, user_id: int) -> bool:
+        gid = str(guild_id); uid = str(user_id)
+        last = int(self.data.get("xp_cooldowns", {}).get(gid, {}).get(uid, 0))
+        now = int(datetime.datetime.now().timestamp())
+        return (now - last) >= 60  # 60 seconds cooldown
+
+    def set_xp_cooldown(self, guild_id: int, user_id: int):
+        gid = str(guild_id); uid = str(user_id)
+        now = int(datetime.datetime.now().timestamp())
+        self.data.setdefault("xp_cooldowns", {}).setdefault(gid, {})[uid] = now
 
     # cooldowns persisted
     def set_cooldown(self, guild_id: int, user_id: int, key: str, ts: int):
@@ -124,6 +181,7 @@ class DataManager:
         if mid in self.data.get("giveaways", {}):
             del self.data["giveaways"][mid]
 
+# single DataManager instance
 data_manager = DataManager()
 
 # -------------------- Bot init --------------------
@@ -155,17 +213,66 @@ def parse_time(time_str: str) -> Optional[int]:
         pass
     return None
 
-# -------------------- Help (single colored embed) --------------------
+# -------------------- Help --------------------
 @bot.command(name="help")
 async def help_cmd(ctx: commands.Context):
     embed = discord.Embed(title="💎 Hoshikuzu — Jeux & Fun", color=discord.Color.purple())
     embed.add_field(name="🎮 Jeux", value="`+coinflip <bet> [pile/face]`, `+slots <bet>`", inline=False)
     embed.add_field(name="💰 Économie", value="`+balance [@user]`, `+work`, `+daily`, `+give @user <amount>`", inline=False)
-    embed.add_field(name="📈 XP & Niveau", value="`+rank [@user]`, `+level [@user]`, `+profile [@user]`", inline=False)
+    embed.add_field(name="📈 XP & Niveau", value="`+rank [@user]`, `+level [@user]`, `+profile [@user]`\n`+setlevelup #channel` - Config level up\n`+addrole <niveau> @role` - Ajouter un rôle de niveau\n`+removerole <niveau>` - Retirer un rôle de niveau\n`+listroles` - Liste des rôles de niveau", inline=False)
     embed.add_field(name="😂 Fun", value="`+8ball <question>`, `+hug [@user]`, `+ship @a @b`, `+meme`", inline=False)
     embed.add_field(name="🏆 Leaderboard", value="`+lb money`, `+lb xp`", inline=False)
     embed.add_field(name="🎁 Giveaway", value="`+gstart <durée> <gagnants> <prix>`\nEx: `+gstart 1h 2 Nitro`", inline=False)
-    embed.set_footer(text="Bot games léger — commandes avec +. Toutes les données sont sauvegardées.")
+    embed.set_footer(text="Bot games — commandes avec +")
+    await ctx.send(embed=embed)
+
+# -------------------- Level Up Config --------------------
+@bot.command(name="setlevelup")
+@commands.has_permissions(manage_guild=True)
+async def set_levelup(ctx: commands.Context, channel: discord.TextChannel):
+    data_manager.set_levelup_channel(ctx.guild.id, channel.id)
+    await data_manager.save()
+    await ctx.send(f"✅ Les messages de level up seront envoyés dans {channel.mention}")
+
+# -------------------- Level Roles Config --------------------
+@bot.command(name="addrole")
+@commands.has_permissions(manage_roles=True)
+async def add_level_role(ctx: commands.Context, level: int, role: discord.Role):
+    if level < 1:
+        return await ctx.send("❌ Le niveau doit être supérieur à 0 !")
+    # Vérifier que le bot peut attribuer ce rôle
+    me = ctx.guild.me or ctx.guild.get_member(bot.user.id)
+    if role.position >= (me.top_role.position if me else 0):
+        return await ctx.send("❌ Je ne peux pas attribuer ce rôle car il est au-dessus de mon rôle le plus élevé !")
+    data_manager.add_level_role(ctx.guild.id, level, role.id)
+    await data_manager.save()
+    await ctx.send(f"✅ Le rôle {role.mention} sera attribué au niveau **{level}** !")
+
+@bot.command(name="removerole")
+@commands.has_permissions(manage_roles=True)
+async def remove_level_role(ctx: commands.Context, level: int):
+    role_id = data_manager.get_role_for_level(ctx.guild.id, level)
+    if not role_id:
+        return await ctx.send(f"❌ Aucun rôle configuré pour le niveau **{level}** !")
+    data_manager.remove_level_role(ctx.guild.id, level)
+    await data_manager.save()
+    await ctx.send(f"✅ Le rôle du niveau **{level}** a été retiré !")
+
+@bot.command(name="listroles")
+async def list_level_roles(ctx: commands.Context):
+    level_roles = data_manager.get_level_roles(ctx.guild.id)
+    if not level_roles:
+        return await ctx.send("📋 Aucun rôle de niveau configuré. Utilise `+addrole <niveau> @role` pour en ajouter !")
+    embed = discord.Embed(title="🎭 Rôles par Niveau", color=discord.Color.blue())
+    desc = ""
+    for level in sorted(level_roles.keys()):
+        role = ctx.guild.get_role(level_roles[level])
+        if role:
+            desc += f"**Niveau {level}** → {role.mention}\n"
+        else:
+            desc += f"**Niveau {level}** → Rôle supprimé\n"
+    embed.description = desc
+    embed.set_footer(text=f"Total: {len(level_roles)} rôle(s) configuré(s)")
     await ctx.send(embed=embed)
 
 # -------------------- Fun Commands --------------------
@@ -190,10 +297,7 @@ async def ship_cmd(ctx: commands.Context, a: discord.Member, b: discord.Member):
 
 @bot.command(name="meme")
 async def meme_cmd(ctx: commands.Context):
-    # try to fetch from meme-api, fallback to static images
-    fallback = [
-        "https://i.imgur.com/1J9Z6.jpg", "https://i.imgur.com/8pQ0Z.jpg", "https://i.imgur.com/2c3KX.jpg"
-    ]
+    fallback = ["https://i.imgur.com/1J9Z6.jpg", "https://i.imgur.com/8pQ0Z.jpg", "https://i.imgur.com/2c3KX.jpg"]
     try:
         import requests
         r = requests.get("https://meme-api.com/gimme", timeout=6)
@@ -211,7 +315,6 @@ async def meme_cmd(ctx: commands.Context):
                 await ctx.send(f"{title} — {url}")
                 return
     except Exception as e:
-        # print for debug but don't spam channel
         print("meme error:", e)
     await ctx.send(random.choice(fallback))
 
@@ -311,7 +414,7 @@ async def slots_cmd(ctx: commands.Context, bet: int):
         await data_manager.save()
         return await ctx.send(f"🎰 {' '.join(res)} — Tu perds **{bet}**.")
 
-# -------------------- Rank / XP commands --------------------
+# -------------------- Rank / XP --------------------
 @bot.command(name="rank")
 async def rank_cmd(ctx: commands.Context, member: Optional[discord.Member] = None):
     member = member or ctx.author
@@ -356,7 +459,7 @@ async def profile_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
     r = data_manager.get_rank(ctx.guild.id, member.id)
     bal = data_manager.get_balance(ctx.guild.id, member.id)
     embed = discord.Embed(title=f"👤 Profil — {member.display_name}", color=discord.Color.blurple())
-    embed.set_thumbnail(url=member.display_avatar.url if hasattr(member, "display_avatar") else None)
+    embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="Niveau", value=str(r["level"]), inline=True)
     embed.add_field(name="XP", value=str(r["xp"]), inline=True)
     embed.add_field(name="Coins", value=str(bal), inline=True)
@@ -367,17 +470,12 @@ async def profile_cmd(ctx: commands.Context, member: Optional[discord.Member] = 
 @bot.command(name="gstart")
 @commands.has_permissions(manage_guild=True)
 async def giveaway_start(ctx: commands.Context, duration: str, winners: int, *, prize: str):
-    """Lance un giveaway. Ex: +gstart 1h 2 Discord Nitro"""
     seconds = parse_time(duration)
     if not seconds:
         return await ctx.send("❌ Durée invalide ! Utilise: 30s, 5m, 1h, 2d")
-    
     if winners < 1:
         return await ctx.send("❌ Il faut au moins 1 gagnant !")
-    
     end_time = _now_ts() + seconds
-    
-    # Créer l'embed du giveaway
     embed = discord.Embed(
         title="🎉 GIVEAWAY 🎉",
         description=f"**Prix:** {prize}\n**Gagnants:** {winners}\n**Temps restant:** {duration}\n\nRéagis avec 🎁 pour participer !",
@@ -385,71 +483,119 @@ async def giveaway_start(ctx: commands.Context, duration: str, winners: int, *, 
     )
     embed.set_footer(text=f"Se termine dans {duration}")
     embed.timestamp = datetime.datetime.fromtimestamp(end_time)
-    
     msg = await ctx.send(embed=embed)
     await msg.add_reaction("🎁")
-    
-    # Sauvegarder le giveaway
     data_manager.create_giveaway(ctx.guild.id, msg.id, prize, end_time, winners)
     await data_manager.save()
-    
-    # Attendre la fin
-    await asyncio.sleep(seconds)
-    
-    # Récupérer les participants
-    giveaway = data_manager.get_giveaway(msg.id)
-    if not giveaway:
-        return
-    
-    try:
-        msg = await ctx.channel.fetch_message(msg.id)
-        reaction = discord.utils.get(msg.reactions, emoji="🎁")
-        
-        if reaction:
-            users = []
-            async for user in reaction.users():
-                if not user.bot:
-                    users.append(user)
-            
+    # run background sleep without blocking other commands
+    async def finish_giveaway(msg_id: int, channel: discord.TextChannel, seconds_local: int):
+        await asyncio.sleep(seconds_local)
+        giveaway = data_manager.get_giveaway(msg_id)
+        if not giveaway:
+            return
+        try:
+            m = await channel.fetch_message(msg_id)
+            reaction = None
+            for r in m.reactions:
+                if str(r.emoji) == "🎁":
+                    reaction = r
+                    break
+            if reaction:
+                users = [user async for user in reaction.users() if not user.bot]
+            else:
+                users = []
+            winners_list = []
             if len(users) == 0:
-                await ctx.send("❌ Aucun participant au giveaway !")
-            elif len(users) < winners:
+                await channel.send("❌ Aucun participant au giveaway !")
+            elif len(users) < giveaway["winners"]:
                 winners_list = users
                 mentions = " ".join([u.mention for u in winners_list])
-                await ctx.send(f"🎉 Pas assez de participants ! Gagnant(s): {mentions}\n**Prix:** {prize}")
+                await channel.send(f"🎉 Pas assez de participants ! Gagnant(s): {mentions}\n**Prix:** {prize}")
             else:
-                winners_list = random.sample(users, winners)
+                winners_list = random.sample(users, giveaway["winners"])
                 mentions = " ".join([u.mention for u in winners_list])
-                await ctx.send(f"🎉 Félicitations ! Gagnant(s): {mentions}\n**Prix:** {prize}")
-            
-            # Update embed
-            embed = msg.embeds[0]
-            embed.description = f"**Prix:** {prize}\n**Gagnants:** {', '.join([u.mention for u in winners_list]) if users else 'Aucun'}\n\n✅ Giveaway terminé !"
-            embed.color = discord.Color.red()
-            await msg.edit(embed=embed)
-    
+                await channel.send(f"🎉 Félicitations ! Gagnant(s): {mentions}\n**Prix:** {prize}")
+            # edit original embed
+            embed2 = m.embeds[0] if m.embeds else None
+            if embed2:
+                embed2.description = f"**Prix:** {prize}\n**Gagnants:** {', '.join([u.mention for u in winners_list]) if winners_list else 'Aucun'}\n\n✅ Giveaway terminé !"
+                embed2.color = discord.Color.red()
+                try: await m.edit(embed=embed2)
+                except: pass
+        except Exception as e:
+            print(f"Erreur giveaway finish: {e}")
+        finally:
+            data_manager.remove_giveaway(msg_id)
+            await data_manager.save()
+
+    bot.loop.create_task(finish_giveaway(msg.id, ctx.channel, seconds))
+
+# -------------------- XP System (message-based) --------------------
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot or not message.guild:
+        await bot.process_commands(message)
+        return
+
+    # First process commands so commands run immediately
+    await bot.process_commands(message)
+
+    try:
+        if data_manager.can_gain_xp(message.guild.id, message.author.id):
+            xp_gain = random.randint(5, 15)
+            result = data_manager.add_xp(message.guild.id, message.author.id, xp_gain)
+            data_manager.set_xp_cooldown(message.guild.id, message.author.id)
+            await data_manager.save()
+
+            if result["leveled"]:
+                levelup_channel_id = data_manager.get_levelup_channel(message.guild.id)
+                level_roles = data_manager.get_level_roles(message.guild.id)
+                # assign role if configured for this new level
+                role_id = data_manager.get_role_for_level(message.guild.id, result["level"])
+                if role_id:
+                    try:
+                        role = message.guild.get_role(int(role_id))
+                        if role:
+                            await message.author.add_roles(role, reason="Level role")
+                    except Exception as e:
+                        print("Could not add level role:", e)
+
+                if levelup_channel_id:
+                    channel = bot.get_channel(levelup_channel_id)
+                    if channel:
+                        embed = discord.Embed(
+                            title="🎉 LEVEL UP ! 🎉",
+                            description=f"{message.author.mention} est passé au **niveau {result['level']}** !",
+                            color=discord.Color.gold()
+                        )
+                        embed.set_thumbnail(url=message.author.display_avatar.url)
+                        embed.add_field(name="Niveau actuel", value=f"🏆 **{result['level']}**", inline=True)
+                        embed.add_field(name="XP", value=f"⭐ **{result['xp']}** / {result['level'] * 100}", inline=True)
+                        embed.set_footer(text=f"Continue comme ça {message.author.display_name} !")
+                        try:
+                            await channel.send(embed=embed)
+                        except Exception as e:
+                            print("Failed to send levelup message:", e)
     except Exception as e:
-        print(f"Erreur giveaway: {e}")
-    
-    finally:
-        data_manager.remove_giveaway(msg.id)
-        await data_manager.save()
+        print("XP on_message error:", e)
+
+# -------------------- Reaction & Giveaway tracking --------------------
+@bot.event
+async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
+    if user.bot:
+        return
+    try:
+        g = data_manager.get_giveaway(reaction.message.id)
+        if g and str(reaction.emoji) == "🎁":
+            data_manager.add_participant(reaction.message.id, user.id)
+            await data_manager.save()
+    except Exception as e:
+        print("reaction add err:", e)
 
 # -------------------- Events --------------------
 @bot.event
 async def on_ready():
     print(f"[GAMES PLUS] connecté comme {bot.user} ({bot.user.id})")
-
-@bot.event
-async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
-    if user.bot:
-        return
-    
-    # Vérifier si c'est un giveaway
-    giveaway = data_manager.get_giveaway(reaction.message.id)
-    if giveaway and str(reaction.emoji) == "🎁":
-        data_manager.add_participant(reaction.message.id, user.id)
-        await data_manager.save()
 
 # -------------------- Run --------------------
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
